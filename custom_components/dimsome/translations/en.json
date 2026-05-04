@@ -1,0 +1,10 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dimsome",
+        "description": "Set up Dimsome adaptive light dimming. Behavior configuration will be added as the integration is built."
+      }
+    }
+  }
+}

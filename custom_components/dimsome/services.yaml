@@ -1,0 +1,8 @@
+resume:
+  fields:
+    entity_id:
+      required: false
+      selector:
+        entity:
+          domain: light
+          multiple: true
