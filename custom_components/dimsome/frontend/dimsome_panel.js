@@ -11,18 +11,18 @@ const DEFAULT_CONFIG = {
 };
 
 const SCHEDULE_TYPES = [
-  ["fixed_time", "Fixed time"],
-  ["civil_sun", "Civil sun"],
+  ["fixed_time", "Fixed Time"],
+  ["civil_sun", "Civil Sun"],
 ];
 
 const SUN_EVENTS = [
-  ["civil_dawn", "Civil dawn"],
-  ["civil_dusk", "Civil dusk"],
+  ["civil_dawn", "Civil Dawn"],
+  ["civil_dusk", "Civil Dusk"],
 ];
 
 const RESUME_MODES = [
-  ["manual_only", "Manual only"],
-  ["after_grace_period", "After grace period"],
+  ["manual_only", "Manual Only"],
+  ["after_grace_period", "After Grace Period"],
 ];
 
 const COLOR_MODE = "color_temp_kelvin";
@@ -63,8 +63,17 @@ const setPath = (object, path, value) => {
 };
 
 const optionHtml = (options, current) => options.map(([value, label]) => (
-  `<option value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`
+  `<ha-list-item value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</ha-list-item>`
 )).join("");
+
+const percentBrightness = (value) => {
+  if (!value) return "";
+  return `${Math.round((Number(value) / 255) * 100)}%`;
+};
+
+const formatEntityName = (state, entityId) => (
+  state?.attributes?.friendly_name || entityId || "New Light"
+);
 
 class DimsomePanel extends HTMLElement {
   constructor() {
@@ -82,9 +91,10 @@ class DimsomePanel extends HTMLElement {
   }
 
   set hass(hass) {
+    const hadHass = Boolean(this._hass);
     this._hass = hass;
     if (!this._loaded) this._loadConfig();
-    this._render();
+    if (!hadHass && this.shadowRoot?.hasChildNodes()) this._hydrateNativeComponents();
   }
 
   get hass() {
@@ -97,8 +107,6 @@ class DimsomePanel extends HTMLElement {
 
   connectedCallback() {
     this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
-    this.shadowRoot.addEventListener("input", (event) => this._handleInput(event));
-    this.shadowRoot.addEventListener("change", (event) => this._handleInput(event));
     this._render();
   }
 
@@ -127,11 +135,11 @@ class DimsomePanel extends HTMLElement {
   async _saveConfig() {
     this._saving = true;
     this._error = "";
-    this._message = "Saving...";
+    this._message = "Saving…";
     this._render();
     try {
       await this._hass.callWS({ type: "dimsome/save_config", config: this._config });
-      this._message = "Saved. Dimsome was reloaded.";
+      this._message = "Saved. Dimsome reloaded.";
       this._loaded = false;
       await this._loadConfig();
     } catch (error) {
@@ -145,13 +153,20 @@ class DimsomePanel extends HTMLElement {
   async _resume(entityId = null) {
     if (!this._hass) return;
     const data = entityId ? { entity_id: [entityId] } : {};
-    await this._hass.callService("dimsome", "resume", data);
-    this._message = entityId ? `Resumed ${entityId}.` : "Resumed all Dimsome lights.";
+    try {
+      await this._hass.callService("dimsome", "resume", data);
+      this._error = "";
+      this._message = entityId ? `Resumed ${entityId}.` : "Resumed all Dimsome lights.";
+    } catch (error) {
+      this._error = error.message || String(error);
+      this._message = "";
+    }
     this._render();
   }
 
   _handleClick(event) {
-    const button = event.target.closest("button[data-action]");
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest("[data-action]");
     if (!button) return;
     const action = button.dataset.action;
     const index = Number(button.dataset.index);
@@ -162,22 +177,21 @@ class DimsomePanel extends HTMLElement {
     if (action === "resume") this._resume(button.dataset.entityId || null);
   }
 
-  _handleInput(event) {
-    const input = event.target;
-    if (!input.dataset) return;
-    if (input.dataset.path) {
-      let value = input.type === "checkbox" ? input.checked : input.value;
-      if (input.dataset.number === "int") value = Number(value);
-      if (input.dataset.duration === "minutes") value = minutesToDuration(value);
-      setPath(this._config, input.dataset.path, value);
-      this._normalizeScheduleForPath(input.dataset.path);
-      this._render();
+  _handleControlInput(control, event) {
+    if (!control?.dataset) return;
+    if (control.dataset.path) {
+      let value = this._controlValue(control, event);
+      if (control.dataset.number === "int") value = Number(value);
+      if (control.dataset.duration === "minutes") value = minutesToDuration(value);
+      setPath(this._config, control.dataset.path, value);
+      this._normalizeScheduleForPath(control.dataset.path);
+      if (control.dataset.renderOnChange || control.dataset.path.endsWith(".type")) this._render();
       return;
     }
-    if (input.dataset.colorToggle) {
-      const index = Number(input.dataset.colorToggle);
+    if ("colorToggle" in control.dataset) {
+      const index = Number(control.dataset.colorToggle);
       const light = this._config.lights[index];
-      if (input.checked) {
+      if (control.checked) {
         light.min_color = { mode: COLOR_MODE, value: 2200 };
         light.max_color = { mode: COLOR_MODE, value: 4000 };
       } else {
@@ -187,10 +201,10 @@ class DimsomePanel extends HTMLElement {
       this._render();
       return;
     }
-    if (input.dataset.overrideToggle) {
-      const index = Number(input.dataset.overrideToggle);
+    if ("overrideToggle" in control.dataset) {
+      const index = Number(control.dataset.overrideToggle);
       const light = this._config.lights[index];
-      if (input.checked) {
+      if (control.checked) {
         light.dim_schedule = clone(this._config.global.dim_schedule);
         light.brighten_schedule = clone(this._config.global.brighten_schedule);
         light.ramp_duration = this._config.global.ramp_duration;
@@ -205,6 +219,17 @@ class DimsomePanel extends HTMLElement {
       }
       this._render();
     }
+  }
+
+  _controlValue(input, event) {
+    if (input.localName === "ha-switch" || input.type === "checkbox") return input.checked;
+    if (input.localName === "ha-select" && event.type === "selected") {
+      const item = input.items?.[event.detail?.index];
+      if (item?.value !== undefined) return item.value;
+    }
+    if (event.detail?.item?.value !== undefined) return event.detail.item.value;
+    if (event.detail?.value !== undefined) return event.detail.value || "";
+    return input.value ?? "";
   }
 
   _normalizeScheduleForPath(path) {
@@ -231,37 +256,121 @@ class DimsomePanel extends HTMLElement {
   }
 
   _removeLight(index) {
+    const light = this._config.lights[index];
+    const name = light?.entity_id || "this light";
+    if (!window.confirm(`Remove ${name} from Dimsome?`)) return;
     this._config.lights.splice(index, 1);
     this._render();
   }
 
-  _availableLightOptions() {
-    const states = this._hass?.states || {};
-    return Object.keys(states)
-      .filter((entityId) => entityId.startsWith("light."))
-      .sort()
-      .map((entityId) => `<option value="${escapeHtml(entityId)}"></option>`)
-      .join("");
+  _hydrateNativeComponents() {
+    if (!this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((picker) => {
+      picker.hass = this._hass;
+      picker.includeDomains = ["light"];
+      picker.value = picker.dataset.value || "";
+    });
+    this.shadowRoot.querySelectorAll("ha-state-icon").forEach((icon) => {
+      icon.hass = this._hass;
+      icon.stateObj = this._hass?.states?.[icon.dataset.entityId];
+    });
+    this.shadowRoot.querySelectorAll("ha-selector[data-selector='time']").forEach((selector) => {
+      selector.hass = this._hass;
+      selector.selector = { time: {} };
+      selector.value = selector.dataset.value || "";
+    });
+    this.shadowRoot.querySelectorAll("ha-select[data-value]").forEach((select) => {
+      select.fixedMenuPosition = true;
+      select.naturalMenuWidth = true;
+      select.value = select.dataset.value;
+      select.options = [...select.querySelectorAll("ha-list-item")].map((item) => ({
+        value: item.getAttribute("value") || "",
+        label: item.textContent.trim(),
+      }));
+      select.requestUpdate?.("options");
+    });
+    this.shadowRoot.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
+      field.value = field.dataset.value;
+    });
+    this.shadowRoot.querySelectorAll("ha-switch").forEach((control) => {
+      control.checked = control.hasAttribute("checked");
+    });
+    this.shadowRoot
+      .querySelectorAll("[data-path], [data-color-toggle], [data-override-toggle]")
+      .forEach((control) => this._bindControl(control));
+  }
+
+  _bindControl(control) {
+    const handler = (event) => this._handleControlInput(control, event);
+    if (control.localName === "ha-switch") {
+      control.addEventListener("change", handler);
+      return;
+    }
+    if (control.localName === "ha-select") {
+      control.addEventListener("selected", handler);
+      control.addEventListener("closed", (event) => event.stopPropagation());
+      return;
+    }
+    if (control.localName === "ha-entity-picker" || control.localName === "ha-selector") {
+      control.addEventListener("value-changed", handler);
+      return;
+    }
+    control.addEventListener("input", handler);
+    control.addEventListener("change", handler);
+  }
+
+  _statusText(light) {
+    const state = this._lightStates[light.entity_id];
+    const attrs = state?.attributes || {};
+    const parts = [state?.state || "Not Found"];
+    const brightness = percentBrightness(attrs.brightness);
+    if (brightness) parts.push(`Brightness ${brightness}`);
+    if (attrs.color_temp_kelvin) parts.push(`${attrs.color_temp_kelvin} K`);
+    return parts.join(" · ");
   }
 
   _renderSchedule(title, path, fallback) {
     const schedule = getPath(this._config, path) || fallback;
     const type = schedule.type || "fixed_time";
     return `
-      <div class="schedule-grid">
-        <h4>${escapeHtml(title)}</h4>
-        <label>Type
-          <select data-path="${path}.type">${optionHtml(SCHEDULE_TYPES, type)}</select>
-        </label>
+      <section class="schedule-card" aria-labelledby="${path.replaceAll(".", "-")}-title">
+        <div class="section-title">
+          <h3 id="${path.replaceAll(".", "-")}-title">${escapeHtml(title)}</h3>
+        </div>
+        <div class="field-grid compact">
+          <ha-select
+            label="Schedule"
+            data-path="${path}.type"
+            data-render-on-change="true"
+            data-value="${escapeHtml(type)}"
+          >${optionHtml(SCHEDULE_TYPES, type)}</ha-select>
         ${type === "fixed_time" ? `
-          <label>Time
-            <input type="time" step="1" value="${escapeHtml(schedule.at || "06:00:00")}" data-path="${path}.at">
-          </label>
+          <ha-selector
+            label="Time"
+            data-value="${escapeHtml(schedule.at || "06:00:00")}" 
+            data-path="${path}.at"
+            data-selector="time"
+          ></ha-selector>
         ` : `
-          <label>Sun event
-            <select data-path="${path}.event">${optionHtml(SUN_EVENTS, schedule.event || "civil_dusk")}</select>
-          </label>
+          <ha-select
+            label="Sun Event"
+            data-path="${path}.event"
+            data-value="${escapeHtml(schedule.event || "civil_dusk")}"
+          >${optionHtml(SUN_EVENTS, schedule.event || "civil_dusk")}</ha-select>
         `}
+        </div>
+      </section>
+    `;
+  }
+
+  _renderSetting(title, description, controlHtml, options = {}) {
+    return `
+      <div class="setting-row ${options.slim ? "slim" : ""}">
+        <div class="setting-copy">
+          <div class="setting-title">${escapeHtml(title)}</div>
+          <div class="setting-description">${escapeHtml(description)}</div>
+        </div>
+        <div class="setting-control">${controlHtml}</div>
       </div>
     `;
   }
@@ -269,173 +378,525 @@ class DimsomePanel extends HTMLElement {
   _renderGlobal() {
     const global = this._config.global;
     return `
-      <section class="card">
-        <div class="card-title">
+      <ha-card>
+        <div class="card-header">
           <div>
-            <h2>Global defaults</h2>
+            <h2>Global Defaults</h2>
             <p>Used by every light unless a light overrides them.</p>
           </div>
         </div>
-        <div class="two-col">
-          ${this._renderSchedule("Dimming", "global.dim_schedule", DEFAULT_CONFIG.global.dim_schedule)}
-          ${this._renderSchedule("Brightening", "global.brighten_schedule", DEFAULT_CONFIG.global.brighten_schedule)}
+        <div class="card-content">
+          <div class="two-col">
+            ${this._renderSchedule("Dimming", "global.dim_schedule", DEFAULT_CONFIG.global.dim_schedule)}
+            ${this._renderSchedule("Brightening", "global.brighten_schedule", DEFAULT_CONFIG.global.brighten_schedule)}
+          </div>
+          <div class="settings-list">
+            ${this._renderSetting("Ramp Duration", "How long each brightness transition should take.", `
+              <ha-textfield
+                label="Minutes"
+                type="number"
+                min="1"
+                max="720"
+                inputmode="numeric"
+                suffix="min"
+                data-value="${durationToMinutes(global.ramp_duration)}"
+                data-path="global.ramp_duration"
+                data-duration="minutes"
+              ></ha-textfield>
+            `)}
+            ${this._renderSetting("Override Resume", "Choose how manual changes return to Dimsome control.", `
+              <ha-select
+                label="Mode"
+                data-path="global.override_resume_mode"
+                data-value="${escapeHtml(global.override_resume_mode || "manual_only")}"
+              >${optionHtml(RESUME_MODES, global.override_resume_mode || "manual_only")}</ha-select>
+            `)}
+            ${this._renderSetting("Grace Period", "Delay before automatic resume after a manual change.", `
+              <ha-textfield
+                label="Minutes"
+                type="number"
+                min="1"
+                max="720"
+                inputmode="numeric"
+                suffix="min"
+                data-value="${durationToMinutes(global.override_grace_period, 15)}"
+                data-path="global.override_grace_period"
+                data-duration="minutes"
+              ></ha-textfield>
+            `)}
+            ${this._renderSetting("Split Brightness & Color Calls", "Enable by default for lights that reject combined brightness/color updates.", `
+              <ha-switch aria-label="Split Brightness &amp; Color Calls" ${global.split_turn_on_calls ? "checked" : ""} data-path="global.split_turn_on_calls"></ha-switch>
+            `)}
+          </div>
         </div>
-        <div class="form-grid">
-          <label>Ramp duration
-            <input type="number" min="1" max="720" value="${durationToMinutes(global.ramp_duration)}" data-path="global.ramp_duration" data-duration="minutes"> minutes
-          </label>
-          <label>Override resume
-            <select data-path="global.override_resume_mode">${optionHtml(RESUME_MODES, global.override_resume_mode || "manual_only")}</select>
-          </label>
-          <label>Grace period
-            <input type="number" min="1" max="720" value="${durationToMinutes(global.override_grace_period, 15)}" data-path="global.override_grace_period" data-duration="minutes"> minutes
-          </label>
-          <label class="check"><input type="checkbox" ${global.split_turn_on_calls ? "checked" : ""} data-path="global.split_turn_on_calls"> Split brightness and color calls by default</label>
-        </div>
-      </section>
+      </ha-card>
     `;
   }
 
   _renderLight(light, index) {
     const state = this._lightStates[light.entity_id] || {};
-    const attrs = state.attributes || {};
     const hasColor = Boolean(light.min_color && light.max_color);
     const hasOverrides = Boolean(light.dim_schedule || light.brighten_schedule || light.ramp_duration || light.override_resume_mode);
+    const entityName = formatEntityName(state, light.entity_id);
     return `
-      <section class="card light-card">
-        <div class="card-title">
-          <div>
-            <h3>${escapeHtml(light.entity_id || "New light")}</h3>
-            <p>${escapeHtml(state.state || "not found")}${attrs.brightness ? ` · brightness ${attrs.brightness}/255` : ""}${attrs.color_temp_kelvin ? ` · ${attrs.color_temp_kelvin} K` : ""}</p>
+      <ha-card class="light-card">
+        <div class="card-header light-header">
+          <div class="entity-title">
+            <div class="entity-icon" aria-hidden="true">
+              ${light.entity_id ? `<ha-state-icon data-entity-id="${escapeHtml(light.entity_id)}"></ha-state-icon>` : `<ha-icon icon="mdi:lightbulb-outline"></ha-icon>`}
+            </div>
+            <div>
+              <h2>${escapeHtml(entityName)}</h2>
+              <p class="status-line">${escapeHtml(this._statusText(light))}</p>
+            </div>
           </div>
           <div class="actions">
-            <button type="button" data-action="resume" data-entity-id="${escapeHtml(light.entity_id || "")}">Resume</button>
-            <button type="button" class="danger" data-action="remove-light" data-index="${index}">Remove</button>
+            <ha-button variant="neutral" data-action="resume" data-entity-id="${escapeHtml(light.entity_id || "")}" ${light.entity_id ? "" : "disabled"}>Resume</ha-button>
+            <ha-button variant="warning" class="danger" data-action="remove-light" data-index="${index}">Remove</ha-button>
           </div>
         </div>
-        <div class="form-grid">
-          <label>Light entity
-            <input value="${escapeHtml(light.entity_id || "")}" list="dimsome-light-entities" data-path="lights.${index}.entity_id">
-          </label>
-          <label>Minimum brightness
-            <input type="number" min="1" max="100" value="${light.min_brightness_pct ?? 10}" data-number="int" data-path="lights.${index}.min_brightness_pct"> %
-          </label>
-          <label>Maximum brightness
-            <input type="number" min="1" max="100" value="${light.max_brightness_pct ?? 80}" data-number="int" data-path="lights.${index}.max_brightness_pct"> %
-          </label>
-          <label class="check"><input type="checkbox" ${light.split_turn_on_calls ? "checked" : ""} data-path="lights.${index}.split_turn_on_calls"> Split brightness and color calls</label>
-          <label class="check"><input type="checkbox" ${hasColor ? "checked" : ""} data-color-toggle="${index}"> Adjust color temperature</label>
+        <div class="card-content">
+          <div class="field-grid">
+            <ha-entity-picker
+              label="Light Entity"
+              helper="Pick a light controlled by Dimsome."
+              allow-custom-entity
+              data-value="${escapeHtml(light.entity_id || "")}"
+              data-path="lights.${index}.entity_id"
+            ></ha-entity-picker>
+            <ha-textfield
+              label="Minimum Brightness"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              suffix="%"
+              data-value="${light.min_brightness_pct ?? 10}"
+              data-number="int"
+              data-path="lights.${index}.min_brightness_pct"
+            ></ha-textfield>
+            <ha-textfield
+              label="Maximum Brightness"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              suffix="%"
+              data-value="${light.max_brightness_pct ?? 80}"
+              data-number="int"
+              data-path="lights.${index}.max_brightness_pct"
+            ></ha-textfield>
+          </div>
+          <div class="settings-list compact-list">
+            ${this._renderSetting("Split Brightness & Color Calls", "Use separate service calls for this light.", `
+              <ha-switch aria-label="Split Brightness &amp; Color Calls" ${light.split_turn_on_calls ? "checked" : ""} data-path="lights.${index}.split_turn_on_calls"></ha-switch>
+            `, { slim: true })}
+            ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
+              <ha-switch aria-label="Adjust Color Temperature" ${hasColor ? "checked" : ""} data-color-toggle="${index}"></ha-switch>
+            `, { slim: true })}
+          </div>
           ${hasColor ? `
-            <label>Minimum color temperature
-              <input type="number" min="1000" max="12000" step="50" value="${light.min_color?.value ?? 2200}" data-number="int" data-path="lights.${index}.min_color.value"> K
-            </label>
-            <label>Maximum color temperature
-              <input type="number" min="1000" max="12000" step="50" value="${light.max_color?.value ?? 4000}" data-number="int" data-path="lights.${index}.max_color.value"> K
-            </label>
+            <div class="field-grid inline-section">
+              <ha-textfield
+                label="Minimum Color Temperature"
+                type="number"
+                min="1000"
+                max="12000"
+                step="50"
+                inputmode="numeric"
+                suffix="K"
+                data-value="${light.min_color?.value ?? 2200}"
+                data-number="int"
+                data-path="lights.${index}.min_color.value"
+              ></ha-textfield>
+              <ha-textfield
+                label="Maximum Color Temperature"
+                type="number"
+                min="1000"
+                max="12000"
+                step="50"
+                inputmode="numeric"
+                suffix="K"
+                data-value="${light.max_color?.value ?? 4000}"
+                data-number="int"
+                data-path="lights.${index}.max_color.value"
+              ></ha-textfield>
+            </div>
           ` : ""}
-          <label class="check"><input type="checkbox" ${hasOverrides ? "checked" : ""} data-override-toggle="${index}"> Override global timing for this light</label>
-        </div>
-        ${hasOverrides ? `
-          <div class="override-box">
-            <div class="two-col">
-              ${this._renderSchedule("Dimming override", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
-              ${this._renderSchedule("Brightening override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
-            </div>
-            <div class="form-grid">
-              <label>Ramp duration
-                <input type="number" min="1" max="720" value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}" data-path="lights.${index}.ramp_duration" data-duration="minutes"> minutes
-              </label>
-              <label>Override resume
-                <select data-path="lights.${index}.override_resume_mode">${optionHtml(RESUME_MODES, light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}</select>
-              </label>
-              <label>Grace period
-                <input type="number" min="1" max="720" value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}" data-path="lights.${index}.override_grace_period" data-duration="minutes"> minutes
-              </label>
-            </div>
+          <div class="settings-list compact-list">
+            ${this._renderSetting("Override Global Timing", "Use a separate schedule and resume behavior for this light.", `
+              <ha-switch aria-label="Override Global Timing" ${hasOverrides ? "checked" : ""} data-override-toggle="${index}"></ha-switch>
+            `, { slim: true })}
           </div>
+        ${hasOverrides ? `
+          <section class="override-box" aria-label="Timing Overrides">
+            <div class="two-col">
+              ${this._renderSchedule("Dimming Override", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
+              ${this._renderSchedule("Brightening Override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
+            </div>
+            <div class="field-grid inline-section">
+              <ha-textfield
+                label="Ramp Duration"
+                type="number"
+                min="1"
+                max="720"
+                inputmode="numeric"
+                suffix="min"
+                data-value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
+                data-path="lights.${index}.ramp_duration"
+                data-duration="minutes"
+              ></ha-textfield>
+              <ha-select
+                label="Override Resume"
+                data-path="lights.${index}.override_resume_mode"
+                data-value="${escapeHtml(light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}"
+              >${optionHtml(RESUME_MODES, light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}</ha-select>
+              <ha-textfield
+                label="Grace Period"
+                type="number"
+                min="1"
+                max="720"
+                inputmode="numeric"
+                suffix="min"
+                data-value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
+                data-path="lights.${index}.override_grace_period"
+                data-duration="minutes"
+              ></ha-textfield>
+            </div>
+          </section>
         ` : ""}
-      </section>
+        </div>
+      </ha-card>
     `;
   }
 
   _render() {
     if (!this.shadowRoot) return;
     if (!this._loaded) {
-      this.shadowRoot.innerHTML = `${this._styles()}<main><div class="loading">Loading Dimsome...</div></main>`;
+      this.shadowRoot.innerHTML = `${this._styles()}<main><ha-card><div class="center-state"><ha-circular-progress active></ha-circular-progress><p>Loading Dimsome…</p></div></ha-card></main>`;
       return;
     }
 
     if (!this._configured) {
-      this.shadowRoot.innerHTML = `${this._styles()}<main><section class="card"><h1>Dimsome</h1><p>Dimsome is not set up yet. Add it from Settings -> Devices & services -> Add integration -> Dimsome.</p></section></main>`;
+      this.shadowRoot.innerHTML = `${this._styles()}<main><ha-card><div class="card-content"><h1>Dimsome</h1><p>Dimsome is not set up yet. Add it from Settings &gt; Devices &amp; Services &gt; Add Integration &gt; Dimsome.</p><p><a href="/config/integrations">Open Integrations</a></p></div></ha-card></main>`;
       return;
     }
 
     this.shadowRoot.innerHTML = `
       ${this._styles()}
       <main>
-        <datalist id="dimsome-light-entities">${this._availableLightOptions()}</datalist>
-        <header>
+        <header class="page-header">
           <div>
             <h1>Dimsome</h1>
-            <p>Manage adaptive dimming schedules, brightness ranges, and manual override behavior.</p>
+            <p>Configure adaptive dimming without leaving Home Assistant.</p>
           </div>
           <div class="toolbar">
-            <button type="button" data-action="reload">Reload</button>
-            <button type="button" data-action="resume">Resume all</button>
-            <button type="button" class="primary" data-action="save" ${this._saving ? "disabled" : ""}>Save</button>
+            <ha-button variant="neutral" data-action="reload">Reload</ha-button>
+            <ha-button variant="neutral" data-action="resume">Resume All</ha-button>
+            <ha-button data-action="save" ${this._saving ? "disabled loading" : ""}>Save</ha-button>
           </div>
         </header>
-        ${this._error ? `<div class="alert error">${escapeHtml(this._error)}</div>` : ""}
-        ${this._message ? `<div class="alert ok">${escapeHtml(this._message)}</div>` : ""}
-        ${this._renderGlobal()}
-        <section class="section-head">
+        <div class="announcements" aria-live="polite">
+          ${this._error ? `<ha-alert alert-type="error">${escapeHtml(this._error)}</ha-alert>` : ""}
+          ${this._message ? `<ha-alert alert-type="success">${escapeHtml(this._message)}</ha-alert>` : ""}
+        </div>
+        <section class="panel-grid">
+          ${this._renderGlobal()}
+        </section>
+        <section class="section-head" aria-labelledby="lights-title">
           <div>
-            <h2>Lights</h2>
+            <h2 id="lights-title">Lights</h2>
             <p>${this._config.lights.length} configured</p>
           </div>
-          <button type="button" data-action="add-light">Add light</button>
+          <ha-button variant="neutral" data-action="add-light">Add Light</ha-button>
         </section>
-        ${this._config.lights.map((light, index) => this._renderLight(light, index)).join("") || `<section class="card empty"><p>No lights configured yet.</p><button type="button" data-action="add-light">Add your first light</button></section>`}
+        <section class="lights-list">
+          ${this._config.lights.map((light, index) => this._renderLight(light, index)).join("") || `<ha-card><div class="center-state empty"><ha-icon icon="mdi:lightbulb-outline"></ha-icon><h2>No Lights Yet</h2><p>Add a light to start adaptive dimming.</p><ha-button data-action="add-light">Add Light</ha-button></div></ha-card>`}
+        </section>
       </main>
     `;
+    this._hydrateNativeComponents();
   }
 
   _styles() {
     return `
       <style>
-        :host { display: block; color: var(--primary-text-color); }
-        main { max-width: 1180px; margin: 0 auto; padding: 24px; box-sizing: border-box; }
-        header, .section-head, .card-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-        h1, h2, h3, h4, p { margin: 0; }
-        h1 { font-size: 32px; }
-        h2 { font-size: 22px; }
-        h3 { font-size: 18px; }
-        h4 { font-size: 15px; margin-bottom: 10px; }
-        p { color: var(--secondary-text-color); margin-top: 4px; }
-        .toolbar, .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .card, .section-head { margin-top: 18px; }
-        .card { background: var(--card-background-color); border-radius: 18px; padding: 18px; box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0,0,0,.16)); border: 1px solid var(--divider-color); }
-        .light-card { border-left: 5px solid var(--accent-color); }
-        .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; margin-top: 16px; }
-        .two-col { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
-        .schedule-grid, .override-box { border: 1px solid var(--divider-color); border-radius: 14px; padding: 14px; }
-        .override-box { margin-top: 16px; background: color-mix(in srgb, var(--primary-background-color) 65%, transparent); }
-        label { display: block; font-weight: 600; font-size: 13px; color: var(--secondary-text-color); }
-        label.check { display: flex; align-items: center; gap: 8px; color: var(--primary-text-color); }
-        input, select { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 9px 10px; border-radius: 10px; border: 1px solid var(--divider-color); background: var(--primary-background-color); color: var(--primary-text-color); font: inherit; }
-        input[type="checkbox"] { width: auto; margin: 0; }
-        button { border: 1px solid var(--divider-color); border-radius: 999px; background: var(--card-background-color); color: var(--primary-text-color); padding: 9px 14px; cursor: pointer; font-weight: 600; }
-        button.primary { background: var(--accent-color); color: var(--text-primary-color, white); border-color: var(--accent-color); }
-        button.danger { color: var(--error-color); }
-        button:disabled { opacity: .6; cursor: progress; }
-        .alert { margin-top: 16px; padding: 12px 14px; border-radius: 12px; }
-        .alert.error { background: color-mix(in srgb, var(--error-color) 16%, transparent); color: var(--error-color); }
-        .alert.ok { background: color-mix(in srgb, var(--success-color, #4caf50) 16%, transparent); }
-        .loading, .empty { text-align: center; color: var(--secondary-text-color); }
+        :host {
+          display: block;
+          color: var(--primary-text-color);
+        }
+
+        main {
+          box-sizing: border-box;
+          max-width: 1120px;
+          margin: 0 auto;
+          padding: 24px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+          margin: 0;
+        }
+
+        h1 {
+          font-size: 32px;
+          font-weight: 600;
+          letter-spacing: -0.02em;
+          line-height: 1.15;
+        }
+
+        h2 {
+          font-size: 20px;
+          font-weight: 500;
+          line-height: 1.3;
+        }
+
+        h3 {
+          font-size: 16px;
+          font-weight: 500;
+          line-height: 1.3;
+        }
+
+        p,
+        .status-line {
+          color: var(--secondary-text-color);
+          margin-top: 4px;
+        }
+
+        a {
+          color: var(--primary-color);
+        }
+
+        ha-card,
+        ha-alert {
+          display: block;
+        }
+
+        ha-textfield,
+        ha-select,
+        ha-selector,
+        ha-entity-picker {
+          width: 100%;
+        }
+
+        ha-button,
+        ha-switch {
+          touch-action: manipulation;
+        }
+
+        .page-header,
+        .section-head,
+        .card-header,
+        .light-header {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        .page-header {
+          margin-bottom: 20px;
+        }
+
+        .toolbar,
+        .actions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+
+        .announcements {
+          display: grid;
+          gap: 8px;
+          margin-bottom: 16px;
+        }
+
+        .panel-grid,
+        .lights-list {
+          display: grid;
+          gap: 16px;
+        }
+
+        .section-head {
+          margin: 24px 0 12px;
+        }
+
+        .card-header {
+          padding: 16px 16px 0;
+        }
+
+        .card-content {
+          padding: 16px;
+        }
+
+        .two-col,
+        .field-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+          gap: 16px;
+        }
+
+        .field-grid.compact {
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        }
+
+        .schedule-card,
+        .override-box {
+          border: 1px solid var(--divider-color);
+          border-radius: var(--ha-card-border-radius, 12px);
+          padding: 16px;
+        }
+
+        .section-title {
+          margin-bottom: 12px;
+        }
+
+        .settings-list {
+          display: grid;
+          gap: 0;
+          margin-top: 8px;
+        }
+
+        .setting-row {
+          align-items: center;
+          border-top: 1px solid var(--divider-color);
+          display: grid;
+          gap: 16px;
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+          min-height: 72px;
+          padding: 12px 0;
+        }
+
+        .setting-row:first-child {
+          border-top: 0;
+        }
+
+        .setting-row.slim {
+          min-height: 56px;
+        }
+
+        .setting-title {
+          font-weight: 500;
+          line-height: 1.4;
+        }
+
+        .setting-description {
+          color: var(--secondary-text-color);
+          line-height: 1.4;
+          margin-top: 2px;
+        }
+
+        .setting-control {
+          align-items: center;
+          display: flex;
+          justify-content: flex-end;
+          min-width: 0;
+        }
+
+        .setting-control ha-switch {
+          flex: 0 0 auto;
+        }
+
+        .compact-list {
+          border-top: 1px solid var(--divider-color);
+          margin-top: 16px;
+        }
+
+        .inline-section,
+        .override-box {
+          margin-top: 16px;
+        }
+
+        .entity-title {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-width: 0;
+        }
+
+        .entity-icon {
+          align-items: center;
+          background: var(--primary-background-color);
+          border-radius: 50%;
+          display: inline-flex;
+          flex: 0 0 40px;
+          height: 40px;
+          justify-content: center;
+          width: 40px;
+        }
+
+        .entity-title h2,
+        .status-line {
+          overflow-wrap: anywhere;
+        }
+
+        .status-line {
+          font-variant-numeric: tabular-nums;
+        }
+
+        .danger {
+          --mdc-theme-primary: var(--error-color);
+        }
+
+        .center-state {
+          align-items: center;
+          color: var(--secondary-text-color);
+          display: grid;
+          gap: 12px;
+          justify-items: center;
+          padding: 48px 16px;
+          text-align: center;
+        }
+
+        .center-state h2 {
+          color: var(--primary-text-color);
+        }
+
+        .empty ha-icon {
+          color: var(--secondary-text-color);
+          --mdc-icon-size: 40px;
+        }
+
+        :focus-visible {
+          outline: 2px solid var(--primary-color);
+          outline-offset: 3px;
+        }
+
         @media (max-width: 720px) {
-          main { padding: 14px; }
-          header, .section-head, .card-title { display: block; }
-          .toolbar, .actions { margin-top: 12px; }
+          main {
+            padding-top: 16px;
+          }
+
+          .page-header,
+          .section-head,
+          .card-header,
+          .light-header {
+            display: grid;
+          }
+
+          .toolbar,
+          .actions {
+            justify-content: flex-start;
+          }
+
+          .field-grid,
+          .field-grid.compact,
+          .two-col {
+            grid-template-columns: 1fr;
+          }
+
+          .setting-row {
+            align-items: stretch;
+            grid-template-columns: 1fr;
+            gap: 10px;
+          }
+
+          .setting-control {
+            justify-content: flex-start;
+          }
         }
       </style>
     `;

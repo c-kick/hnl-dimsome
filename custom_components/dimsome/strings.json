@@ -16,5 +16,17 @@
         "name": "Resume"
       }
     }
+  },
+  "services": {
+    "resume": {
+      "name": "Resume",
+      "description": "Resume Dimsome control for all configured lights or the selected light entities.",
+      "fields": {
+        "entity_id": {
+          "name": "Light entities",
+          "description": "Only resume Dimsome control for these light entities. Leave empty to resume all configured lights."
+        }
+      }
+    }
   }
 }

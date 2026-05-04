@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 import voluptuous as vol
@@ -37,7 +38,7 @@ class DimsomeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         if user_input is not None:
-            return self.async_create_entry(title="Dimsome", data=DEFAULT_CONFIG)
+            return self.async_create_entry(title="Dimsome", data=deepcopy(DEFAULT_CONFIG))
 
         return self.async_show_form(
             step_id="user",

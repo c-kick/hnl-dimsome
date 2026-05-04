@@ -11,7 +11,9 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
 
-    type DimsomeConfigEntry = ConfigEntry[dict[str, object]]
+    from .coordinator import DimsomeController
+
+    type DimsomeConfigEntry = ConfigEntry[DimsomeController]
 else:
     type DimsomeConfigEntry = Any
 
@@ -21,10 +23,12 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Set up Dimsome panel, WebSocket API, and optional YAML import."""
     from .api import register_ws_api
+    from .coordinator import register_services
     from .panel import async_setup_panel
 
     await async_setup_panel(hass)
     register_ws_api(hass)
+    register_services(hass)
 
     if DOMAIN not in config:
         return True
@@ -40,7 +44,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> bool:
     """Set up Dimsome from a config entry."""
-    from .coordinator import DimsomeController, register_services
+    from .coordinator import DimsomeController
     from .models import resolve_light_configs
 
     raw_config = {**entry.data, **entry.options}
@@ -52,8 +56,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
 
     existing_lights = {
         entity_id
-        for controller in hass.data.get(DOMAIN, {}).values()
-        for entity_id in controller.lights
+        for loaded_entry in hass.config_entries.async_loaded_entries(DOMAIN)
+        if loaded_entry.entry_id != entry.entry_id
+        for entity_id in loaded_entry.runtime_data.lights
     }
     duplicate_lights = {
         config.entity_id for config in light_configs if config.entity_id in existing_lights
@@ -66,8 +71,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
         return False
 
     controller = DimsomeController(hass, entry.entry_id, light_configs)
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = controller
-    register_services(hass)
+    entry.runtime_data = controller
     await controller.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
@@ -79,11 +83,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
         return False
-    controller = hass.data[DOMAIN].pop(entry.entry_id, None)
-    if controller is not None:
-        await controller.async_stop()
-    if not hass.data[DOMAIN]:
-        hass.data.pop(DOMAIN)
+    await entry.runtime_data.async_stop()
     return True
 
 

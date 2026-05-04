@@ -10,15 +10,16 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import DimsomeController
 
+type DimsomeConfigEntry = ConfigEntry[DimsomeController]
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: DimsomeConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Dimsome button entities."""
-    controller: DimsomeController = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([DimsomeResumeButton(controller, entry.entry_id)])
+    async_add_entities([DimsomeResumeButton(entry.runtime_data, entry.entry_id)])
 
 
 class DimsomeResumeButton(ButtonEntity):

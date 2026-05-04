@@ -142,6 +142,20 @@ def active_window(
     return None
 
 
+def next_window_start(
+    config: ResolvedLightConfig,
+    now: datetime,
+    sun_samples: list[SunElevationSample],
+) -> datetime | None:
+    """Return the next known ramp start after now."""
+    starts = [
+        window.start
+        for window in candidate_windows(config, now, sun_samples)
+        if window.start > now
+    ]
+    return min(starts, default=None)
+
+
 def is_low_plateau(
     config: ResolvedLightConfig,
     now: datetime,

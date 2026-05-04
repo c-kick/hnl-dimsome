@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
+from collections.abc import Collection
 from typing import Any
 
+import voluptuous as vol
+
 from homeassistant.components.light import ATTR_BRIGHTNESS, DOMAIN as LIGHT_DOMAIN
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -22,6 +28,7 @@ from .engine import (
     SunElevationSample,
     active_window,
     brightness_pct_to_ha,
+    next_window_start,
     should_ignore_state_change,
     target_for_now,
 )
@@ -41,6 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 RAMP_INTERVAL = timedelta(seconds=15)
 IGNORE_UPDATE_WINDOW = timedelta(seconds=3)
 SUN_ENTITY_ID = "sun.sun"
+RESUME_SERVICE_SCHEMA = vol.Schema({vol.Optional(ATTR_ENTITY_ID): cv.entity_ids})
 
 
 class DimsomeController:
@@ -60,6 +68,7 @@ class DimsomeController:
         }
         self._unsubs: list[Any] = []
         self._ramp_unsub: Any | None = None
+        self._wake_unsub: Any | None = None
         self._sun_samples: list[SunElevationSample] = []
 
     async def async_start(self) -> None:
@@ -88,6 +97,9 @@ class DimsomeController:
         if self._ramp_unsub is not None:
             self._ramp_unsub()
             self._ramp_unsub = None
+        if self._wake_unsub is not None:
+            self._wake_unsub()
+            self._wake_unsub = None
         for runtime in self.lights.values():
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
@@ -95,7 +107,7 @@ class DimsomeController:
         while self._unsubs:
             self._unsubs.pop()()
 
-    async def async_resume(self, entity_ids: list[str] | None = None) -> None:
+    async def async_resume(self, entity_ids: Collection[str] | None = None) -> None:
         """Resume Dimsome control for selected lights."""
         selected = set(entity_ids or self.lights)
         for entity_id, runtime in self.lights.items():
@@ -111,9 +123,15 @@ class DimsomeController:
         """Apply current targets and manage the active ramp timer."""
         now = dt_util.now()
         any_active = False
+        next_start = None
         for runtime in self.lights.values():
             state = self.hass.states.get(runtime.config.entity_id)
             window = active_window(runtime.config, now, self._sun_samples)
+            candidate_start = next_window_start(runtime.config, now, self._sun_samples)
+            if candidate_start is not None and (
+                next_start is None or candidate_start < next_start
+            ):
+                next_start = candidate_start
             target = target_for_now(runtime.config, now, self._sun_samples)
             if target is None:
                 runtime.last_target = None
@@ -126,6 +144,8 @@ class DimsomeController:
                 continue
             await self._async_apply_target(runtime, target)
 
+        if any_active:
+            self._cancel_wake_timer()
         if any_active and self._ramp_unsub is None:
             self._ramp_unsub = async_track_time_interval(
                 self.hass, self.async_tick, RAMP_INTERVAL
@@ -133,6 +153,25 @@ class DimsomeController:
         elif not any_active and self._ramp_unsub is not None:
             self._ramp_unsub()
             self._ramp_unsub = None
+        if not any_active:
+            self._schedule_wake_timer(now, next_start)
+
+    def _cancel_wake_timer(self) -> None:
+        """Cancel the one-shot timer for the next ramp start."""
+        if self._wake_unsub is None:
+            return
+        self._wake_unsub()
+        self._wake_unsub = None
+
+    def _schedule_wake_timer(
+        self, now: datetime, next_start: datetime | None
+    ) -> None:
+        """Schedule a one-shot tick for the next known ramp start."""
+        self._cancel_wake_timer()
+        if next_start is None:
+            return
+        delay = max(0.0, (next_start - now).total_seconds())
+        self._wake_unsub = async_call_later(self.hass, delay, self.async_tick)
 
     @callback
     def _async_light_changed(self, event: Event) -> None:
@@ -146,11 +185,13 @@ class DimsomeController:
 
         if old_state is not None and old_state.state == STATE_OFF and new_state.state == STATE_ON:
             runtime.stood_down = False
+            runtime.last_target = None
             self.hass.async_create_task(self._async_handle_turn_on(runtime))
             return
 
         now = dt_util.now()
         if new_state.state != STATE_ON:
+            runtime.last_target = None
             return
         if should_ignore_state_change(
             in_flight=runtime.in_flight,
@@ -321,10 +362,25 @@ async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle dimsome.resume."""
     entity_ids = call.data.get(ATTR_ENTITY_ID)
     if isinstance(entity_ids, str):
-        selected = [entity_ids]
+        selected = {entity_ids}
     else:
-        selected = list(entity_ids) if entity_ids else None
-    for controller in hass.data.get(DOMAIN, {}).values():
+        selected = set(entity_ids) if entity_ids else None
+    controllers: list[DimsomeController] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.state is ConfigEntryState.LOADED:
+            controllers.append(entry.runtime_data)
+    if not controllers:
+        raise ServiceValidationError("No loaded Dimsome config entries")
+    if selected is not None:
+        configured = {
+            entity_id for controller in controllers for entity_id in controller.lights
+        }
+        missing = selected - configured
+        if missing:
+            raise ServiceValidationError(
+                f"Lights are not configured in Dimsome: {', '.join(sorted(missing))}"
+            )
+    for controller in controllers:
         await controller.async_resume(selected)
 
 
@@ -332,4 +388,13 @@ def register_services(hass: HomeAssistant) -> None:
     """Register Dimsome services once."""
     if hass.services.has_service(DOMAIN, SERVICE_RESUME):
         return
-    hass.services.async_register(DOMAIN, SERVICE_RESUME, async_resume_service)
+
+    async def _async_resume_service(call: ServiceCall) -> None:
+        await async_resume_service(hass, call)
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESUME,
+        _async_resume_service,
+        schema=RESUME_SERVICE_SCHEMA,
+    )

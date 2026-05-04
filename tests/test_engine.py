@@ -12,6 +12,7 @@ from custom_components.dimsome.engine import (
     brightness_pct_to_ha,
     civil_event_time,
     is_low_plateau,
+    next_window_start,
     should_ignore_state_change,
     SunElevationSample,
     target_for_now,
@@ -109,6 +110,15 @@ def test_fixed_schedule_reconstructs_mid_ramp() -> None:
     assert window is not None
     assert window.sequence is SequenceKind.DIM
     assert target_for_window(fixed_config(), window, now).brightness_pct == 45
+
+
+def test_fixed_schedule_finds_next_ramp_start() -> None:
+    """The runtime can schedule a wake-up before the next fixed ramp."""
+    now = datetime(2026, 5, 4, 21, 55, tzinfo=TZ)
+
+    assert next_window_start(fixed_config(), now, []) == datetime(
+        2026, 5, 4, 22, 0, tzinfo=TZ
+    )
 
 
 def test_low_plateau_across_midnight() -> None:
