@@ -2,8 +2,18 @@
   "config": {
     "step": {
       "user": {
-        "title": "Dimsome",
-        "description": "Set up Dimsome adaptive light dimming. Behavior configuration will be added as the integration is built."
+        "title": "Set up Dimsome",
+        "description": "Create the Dimsome integration entry. Configure lights and schedules from the Dimsome sidebar panel."
+      }
+    },
+    "abort": {
+      "already_configured": "Dimsome is already configured. Use the Dimsome sidebar panel to edit it."
+    }
+  },
+  "entity": {
+    "button": {
+      "resume": {
+        "name": "Resume"
       }
     }
   }

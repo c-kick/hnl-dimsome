@@ -3,6 +3,7 @@
   "name": "Dimsome",
   "codeowners": [],
   "config_flow": true,
+  "dependencies": ["frontend", "http"],
   "documentation": "https://github.com/c-kick/hnl-dimsome",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/c-kick/hnl-dimsome/issues",

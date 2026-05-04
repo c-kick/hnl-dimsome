@@ -25,12 +25,16 @@ class DimsomeResumeButton(ButtonEntity):
     """Resume all lights controlled by one Dimsome config entry."""
 
     _attr_has_entity_name = True
-    _attr_name = "Resume"
+    _attr_translation_key = "resume"
 
     def __init__(self, controller: DimsomeController, entry_id: str) -> None:
         """Initialize the button."""
         self._controller = controller
         self._attr_unique_id = f"{entry_id}_resume"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry_id)},
+            "name": "Dimsome",
+        }
 
     async def async_press(self) -> None:
         """Resume all Dimsome-controlled lights in this entry."""

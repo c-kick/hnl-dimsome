@@ -19,7 +19,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
-    """Set up Dimsome from YAML, when present."""
+    """Set up Dimsome panel, WebSocket API, and optional YAML import."""
+    from .api import register_ws_api
+    from .panel import async_setup_panel
+
+    await async_setup_panel(hass)
+    register_ws_api(hass)
+
     if DOMAIN not in config:
         return True
     hass.async_create_task(
@@ -40,7 +46,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
     raw_config = {**entry.data, **entry.options}
     try:
         light_configs = resolve_light_configs(raw_config)
-    except ValueError as err:
+    except (KeyError, TypeError, ValueError) as err:
         _LOGGER.error("Invalid Dimsome configuration: %s", err)
         return False
 
@@ -64,6 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
     register_services(hass)
     await controller.async_start()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
 
 
@@ -78,3 +85,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> 
     if not hass.data[DOMAIN]:
         hass.data.pop(DOMAIN)
     return True
+
+
+async def _async_update_listener(
+    hass: HomeAssistant, entry: DimsomeConfigEntry
+) -> None:
+    """Reload Dimsome when options change."""
+    await hass.config_entries.async_reload(entry.entry_id)

@@ -6,13 +6,13 @@ The name is a play on dimming and dim sum. The first implementation will be base
 
 ## Development Install
 
-This repository is intended to be symlinked directly into Home Assistant:
+This repository is intended to be bind-mounted into Home Assistant, matching the Juice Patrol development setup:
 
 ```bash
-./custom_components/dimsome -> ./custom_components/dimsome
+./custom_components/dimsome -> /config/custom_components/dimsome:ro
 ```
 
-Because Home Assistant loads custom integrations from `/config/custom_components`, source edits here are immediately present in the Home Assistant config directory. Python integration changes still require a Home Assistant reload or restart depending on the changed module; future service/entity logic can add explicit reload support where useful.
+Because Home Assistant loads custom integrations from `/config/custom_components`, source edits here are immediately present in the Home Assistant container. Python integration changes still require reloading the integration or restarting Home Assistant depending on the changed module.
 
 ## Current State
 
@@ -27,10 +27,22 @@ The integration currently provides the first runtime implementation:
 - optional per-light grace-period resume
 - `button.dimsome_resume` and `dimsome.resume` service
 - split `light.turn_on` calls for lights that cannot apply brightness and color together
+- persistent Dimsome sidebar panel for global defaults plus add/edit/remove light configuration
 
-The config flow currently creates/imports the integration. Detailed light configuration is intended to be supplied through YAML while the options UI is still minimal.
+Create Dimsome from Home Assistant: Settings -> Devices & services -> Add integration -> Dimsome. Then manage lights and schedules from the Dimsome sidebar panel. YAML import is still supported for development/migration, but it is no longer the primary setup path.
 
-## Example Configuration
+## GUI
+
+The setup flow only creates the integration entry. The Dimsome sidebar panel manages:
+
+- Global dimming and brightening defaults
+- One or more controlled lights
+- Optional per-light overrides for schedules, ramp duration, and manual override behavior
+- Resume controls for all lights or a single light
+
+## YAML Example
+
+YAML remains available as an import path, but normal configuration should use the GUI.
 
 ```yaml
 dimsome:
