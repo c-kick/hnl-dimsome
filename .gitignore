@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 .DS_Store
 CLAUDE.md
+AGENTS.md
+.agents/
+.claude/
+.codex/

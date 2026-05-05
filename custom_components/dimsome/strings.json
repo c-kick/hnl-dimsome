@@ -15,6 +15,11 @@
       "resume": {
         "name": "Resume"
       }
+    },
+    "switch": {
+      "enabled": {
+        "name": "Dimsome enabled"
+      }
     }
   },
   "services": {

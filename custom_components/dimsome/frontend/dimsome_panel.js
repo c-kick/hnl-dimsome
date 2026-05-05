@@ -6,6 +6,7 @@ const DEFAULT_CONFIG = {
     override_resume_mode: "manual_only",
     override_grace_period: "00:15:00",
     split_turn_on_calls: false,
+    apply_on_recovered_on: true,
   },
   lights: [],
 };
@@ -26,6 +27,12 @@ const RESUME_MODES = [
 ];
 
 const COLOR_MODE = "color_temp_kelvin";
+
+// MDI icon SVG paths
+const MDI_REFRESH = "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z";
+const MDI_CONTENT_SAVE = "M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z";
+const MDI_PLAY_CIRCLE = "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5V7.5L16,12L10,16.5Z";
+const MDI_DELETE = "M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z";
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -248,9 +255,11 @@ class DimsomePanel extends HTMLElement {
   _addLight() {
     this._config.lights.push({
       entity_id: "",
+      enabled: true,
       min_brightness_pct: 10,
       max_brightness_pct: 80,
       split_turn_on_calls: this._config.global.split_turn_on_calls || false,
+      apply_on_recovered_on: this._config.global.apply_on_recovered_on ?? true,
     });
     this._render();
   }
@@ -265,20 +274,37 @@ class DimsomePanel extends HTMLElement {
 
   _hydrateNativeComponents() {
     if (!this.shadowRoot) return;
+
+    // Icon button SVG paths
+    this.shadowRoot.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
+      const action = btn.dataset.action;
+      if (action === "reload") btn.path = MDI_REFRESH;
+      if (action === "resume") btn.path = MDI_PLAY_CIRCLE;
+      if (action === "save") btn.path = MDI_CONTENT_SAVE;
+      if (action === "remove-light") btn.path = MDI_DELETE;
+    });
+
+    // Entity pickers
     this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((picker) => {
       picker.hass = this._hass;
       picker.includeDomains = ["light"];
       picker.value = picker.dataset.value || "";
     });
+
+    // State icons
     this.shadowRoot.querySelectorAll("ha-state-icon").forEach((icon) => {
       icon.hass = this._hass;
       icon.stateObj = this._hass?.states?.[icon.dataset.entityId];
     });
+
+    // Time selectors
     this.shadowRoot.querySelectorAll("ha-selector[data-selector='time']").forEach((selector) => {
       selector.hass = this._hass;
       selector.selector = { time: {} };
       selector.value = selector.dataset.value || "";
     });
+
+    // Selects
     this.shadowRoot.querySelectorAll("ha-select[data-value]").forEach((select) => {
       select.fixedMenuPosition = true;
       select.naturalMenuWidth = true;
@@ -289,12 +315,18 @@ class DimsomePanel extends HTMLElement {
       }));
       select.requestUpdate?.("options");
     });
+
+    // Text fields
     this.shadowRoot.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
       field.value = field.dataset.value;
     });
+
+    // Switches
     this.shadowRoot.querySelectorAll("ha-switch").forEach((control) => {
       control.checked = control.hasAttribute("checked");
     });
+
+    // Bind all data controls
     this.shadowRoot
       .querySelectorAll("[data-path], [data-color-toggle], [data-override-toggle]")
       .forEach((control) => this._bindControl(control));
@@ -332,45 +364,56 @@ class DimsomePanel extends HTMLElement {
   _renderSchedule(title, path, fallback) {
     const schedule = getPath(this._config, path) || fallback;
     const type = schedule.type || "fixed_time";
+    const id = path.replaceAll(".", "-");
     return `
-      <section class="schedule-card" aria-labelledby="${path.replaceAll(".", "-")}-title">
-        <div class="section-title">
-          <h3 id="${path.replaceAll(".", "-")}-title">${escapeHtml(title)}</h3>
-        </div>
+      <div class="schedule-card" aria-labelledby="${id}-title">
+        <div class="schedule-title" id="${id}-title">${escapeHtml(title)}</div>
         <div class="field-grid compact">
-          <ha-select
-            label="Schedule"
-            data-path="${path}.type"
-            data-render-on-change="true"
-            data-value="${escapeHtml(type)}"
-          >${optionHtml(SCHEDULE_TYPES, type)}</ha-select>
-        ${type === "fixed_time" ? `
-          <ha-selector
-            label="Time"
-            data-value="${escapeHtml(schedule.at || "06:00:00")}" 
-            data-path="${path}.at"
-            data-selector="time"
-          ></ha-selector>
-        ` : `
-          <ha-select
-            label="Sun Event"
-            data-path="${path}.event"
-            data-value="${escapeHtml(schedule.event || "civil_dusk")}"
-          >${optionHtml(SUN_EVENTS, schedule.event || "civil_dusk")}</ha-select>
-        `}
+          ${this._renderField("Schedule", `
+            <ha-select
+              data-path="${path}.type"
+              data-render-on-change="true"
+              data-value="${escapeHtml(type)}"
+            >${optionHtml(SCHEDULE_TYPES, type)}</ha-select>
+          `)}
+          ${type === "fixed_time" ? `
+            ${this._renderField("Time", `
+              <ha-selector
+                data-value="${escapeHtml(schedule.at || "06:00:00")}"
+                data-path="${path}.at"
+                data-selector="time"
+              ></ha-selector>
+            `)}
+          ` : `
+            ${this._renderField("Sun Event", `
+              <ha-select
+                data-path="${path}.event"
+                data-value="${escapeHtml(schedule.event || "civil_dusk")}"
+              >${optionHtml(SUN_EVENTS, schedule.event || "civil_dusk")}</ha-select>
+            `)}
+          `}
         </div>
-      </section>
+      </div>
     `;
   }
 
-  _renderSetting(title, description, controlHtml, options = {}) {
+  _renderField(label, controlHtml) {
     return `
-      <div class="setting-row ${options.slim ? "slim" : ""}">
-        <div class="setting-copy">
-          <div class="setting-title">${escapeHtml(title)}</div>
-          <div class="setting-description">${escapeHtml(description)}</div>
+      <div class="field-wrap">
+        <span class="field-label">${escapeHtml(label)}</span>
+        ${controlHtml}
+      </div>
+    `;
+  }
+
+  _renderSetting(title, description, controlHtml) {
+    return `
+      <div class="settings-row">
+        <div class="settings-label">
+          <div class="settings-heading">${escapeHtml(title)}</div>
+          <div class="settings-description">${escapeHtml(description)}</div>
         </div>
-        <div class="setting-control">${controlHtml}</div>
+        <div class="settings-control">${controlHtml}</div>
       </div>
     `;
   }
@@ -379,12 +422,7 @@ class DimsomePanel extends HTMLElement {
     const global = this._config.global;
     return `
       <ha-card>
-        <div class="card-header">
-          <div>
-            <h2>Global Defaults</h2>
-            <p>Used by every light unless a light overrides them.</p>
-          </div>
-        </div>
+        <div class="card-header">Global Defaults</div>
         <div class="card-content">
           <div class="two-col">
             ${this._renderSchedule("Dimming", "global.dim_schedule", DEFAULT_CONFIG.global.dim_schedule)}
@@ -425,7 +463,18 @@ class DimsomePanel extends HTMLElement {
               ></ha-textfield>
             `)}
             ${this._renderSetting("Split Brightness & Color Calls", "Enable by default for lights that reject combined brightness/color updates.", `
-              <ha-switch aria-label="Split Brightness &amp; Color Calls" ${global.split_turn_on_calls ? "checked" : ""} data-path="global.split_turn_on_calls"></ha-switch>
+              <ha-switch
+                aria-label="Split Brightness &amp; Color Calls"
+                ${global.split_turn_on_calls ? "checked" : ""}
+                data-path="global.split_turn_on_calls"
+              ></ha-switch>
+            `)}
+            ${this._renderSetting("Apply On Recovery", "Apply the current day, night, or ramp target when a light recovers online while on.", `
+              <ha-switch
+                aria-label="Apply On Recovery"
+                ${(global.apply_on_recovered_on ?? true) ? "checked" : ""}
+                data-path="global.apply_on_recovered_on"
+              ></ha-switch>
             `)}
           </div>
         </div>
@@ -439,132 +488,161 @@ class DimsomePanel extends HTMLElement {
     const hasOverrides = Boolean(light.dim_schedule || light.brighten_schedule || light.ramp_duration || light.override_resume_mode);
     const entityName = formatEntityName(state, light.entity_id);
     return `
-      <ha-card class="light-card">
-        <div class="card-header light-header">
-          <div class="entity-title">
-            <div class="entity-icon" aria-hidden="true">
-              ${light.entity_id ? `<ha-state-icon data-entity-id="${escapeHtml(light.entity_id)}"></ha-state-icon>` : `<ha-icon icon="mdi:lightbulb-outline"></ha-icon>`}
-            </div>
-            <div>
-              <h2>${escapeHtml(entityName)}</h2>
-              <p class="status-line">${escapeHtml(this._statusText(light))}</p>
-            </div>
-          </div>
-          <div class="actions">
-            <ha-button variant="neutral" data-action="resume" data-entity-id="${escapeHtml(light.entity_id || "")}" ${light.entity_id ? "" : "disabled"}>Resume</ha-button>
-            <ha-button variant="warning" class="danger" data-action="remove-light" data-index="${index}">Remove</ha-button>
-          </div>
-        </div>
+      <ha-card>
         <div class="card-content">
-          <div class="field-grid">
-            <ha-entity-picker
-              label="Light Entity"
-              helper="Pick a light controlled by Dimsome."
-              allow-custom-entity
-              data-value="${escapeHtml(light.entity_id || "")}"
-              data-path="lights.${index}.entity_id"
-            ></ha-entity-picker>
-            <ha-textfield
-              label="Minimum Brightness"
-              type="number"
-              min="1"
-              max="100"
-              inputmode="numeric"
-              suffix="%"
-              data-value="${light.min_brightness_pct ?? 10}"
-              data-number="int"
-              data-path="lights.${index}.min_brightness_pct"
-            ></ha-textfield>
-            <ha-textfield
-              label="Maximum Brightness"
-              type="number"
-              min="1"
-              max="100"
-              inputmode="numeric"
-              suffix="%"
-              data-value="${light.max_brightness_pct ?? 80}"
-              data-number="int"
-              data-path="lights.${index}.max_brightness_pct"
-            ></ha-textfield>
+          <div class="light-header-row">
+            <div class="entity-title">
+              <div class="entity-icon">
+                ${light.entity_id
+                  ? `<ha-state-icon data-entity-id="${escapeHtml(light.entity_id)}"></ha-state-icon>`
+                  : `<ha-icon icon="mdi:lightbulb-outline"></ha-icon>`}
+              </div>
+              <div class="entity-info">
+                <div class="entity-name">${escapeHtml(entityName)}</div>
+                <div class="status-line">${escapeHtml(this._statusText(light))}</div>
+              </div>
+            </div>
+            <div class="light-actions">
+              <ha-icon-button
+                label="Remove light"
+                class="remove-btn"
+                data-action="remove-light"
+                data-index="${index}"
+              ></ha-icon-button>
+            </div>
           </div>
-          <div class="settings-list compact-list">
+          <div class="field-grid top-gap">
+            ${this._renderField("Light Entity", `
+              <ha-entity-picker
+                allow-custom-entity
+                data-value="${escapeHtml(light.entity_id || "")}"
+                data-path="lights.${index}.entity_id"
+              ></ha-entity-picker>
+            `)}
+            ${this._renderField("Minimum Brightness", `
+              <ha-textfield
+                type="number"
+                min="1"
+                max="100"
+                inputmode="numeric"
+                suffix="%"
+                data-value="${light.min_brightness_pct ?? 10}"
+                data-number="int"
+                data-path="lights.${index}.min_brightness_pct"
+              ></ha-textfield>
+            `)}
+            ${this._renderField("Maximum Brightness", `
+              <ha-textfield
+                type="number"
+                min="1"
+                max="100"
+                inputmode="numeric"
+                suffix="%"
+                data-value="${light.max_brightness_pct ?? 80}"
+                data-number="int"
+                data-path="lights.${index}.max_brightness_pct"
+              ></ha-textfield>
+            `)}
+          </div>
+          <div class="settings-list">
             ${this._renderSetting("Split Brightness & Color Calls", "Use separate service calls for this light.", `
-              <ha-switch aria-label="Split Brightness &amp; Color Calls" ${light.split_turn_on_calls ? "checked" : ""} data-path="lights.${index}.split_turn_on_calls"></ha-switch>
-            `, { slim: true })}
+              <ha-switch
+                aria-label="Split Brightness &amp; Color Calls"
+                ${light.split_turn_on_calls ? "checked" : ""}
+                data-path="lights.${index}.split_turn_on_calls"
+              ></ha-switch>
+            `)}
+            ${this._renderSetting("Apply On Recovery", "Apply the current day, night, or ramp target when this light recovers online while on.", `
+              <ha-switch
+                aria-label="Apply On Recovery"
+                ${(light.apply_on_recovered_on ?? true) ? "checked" : ""}
+                data-path="lights.${index}.apply_on_recovered_on"
+              ></ha-switch>
+            `)}
             ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
-              <ha-switch aria-label="Adjust Color Temperature" ${hasColor ? "checked" : ""} data-color-toggle="${index}"></ha-switch>
-            `, { slim: true })}
+              <ha-switch
+                aria-label="Adjust Color Temperature"
+                ${hasColor ? "checked" : ""}
+                data-color-toggle="${index}"
+              ></ha-switch>
+            `)}
           </div>
           ${hasColor ? `
-            <div class="field-grid inline-section">
-              <ha-textfield
-                label="Minimum Color Temperature"
-                type="number"
-                min="1000"
-                max="12000"
-                step="50"
-                inputmode="numeric"
-                suffix="K"
-                data-value="${light.min_color?.value ?? 2200}"
-                data-number="int"
-                data-path="lights.${index}.min_color.value"
-              ></ha-textfield>
-              <ha-textfield
-                label="Maximum Color Temperature"
-                type="number"
-                min="1000"
-                max="12000"
-                step="50"
-                inputmode="numeric"
-                suffix="K"
-                data-value="${light.max_color?.value ?? 4000}"
-                data-number="int"
-                data-path="lights.${index}.max_color.value"
-              ></ha-textfield>
+            <div class="field-grid top-gap">
+              ${this._renderField("Minimum Brightness Color Temperature", `
+                <ha-textfield
+                  type="number"
+                  min="1000"
+                  max="12000"
+                  step="50"
+                  inputmode="numeric"
+                  suffix="K"
+                  data-value="${light.min_color?.value ?? 2200}"
+                  data-number="int"
+                  data-path="lights.${index}.min_color.value"
+                ></ha-textfield>
+              `)}
+              ${this._renderField("Maximum Brightness Color Temperature", `
+                <ha-textfield
+                  type="number"
+                  min="1000"
+                  max="12000"
+                  step="50"
+                  inputmode="numeric"
+                  suffix="K"
+                  data-value="${light.max_color?.value ?? 4000}"
+                  data-number="int"
+                  data-path="lights.${index}.max_color.value"
+                ></ha-textfield>
+              `)}
             </div>
           ` : ""}
-          <div class="settings-list compact-list">
+          <div class="settings-list">
             ${this._renderSetting("Override Global Timing", "Use a separate schedule and resume behavior for this light.", `
-              <ha-switch aria-label="Override Global Timing" ${hasOverrides ? "checked" : ""} data-override-toggle="${index}"></ha-switch>
-            `, { slim: true })}
+              <ha-switch
+                aria-label="Override Global Timing"
+                ${hasOverrides ? "checked" : ""}
+                data-override-toggle="${index}"
+              ></ha-switch>
+            `)}
           </div>
-        ${hasOverrides ? `
-          <section class="override-box" aria-label="Timing Overrides">
-            <div class="two-col">
-              ${this._renderSchedule("Dimming Override", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
-              ${this._renderSchedule("Brightening Override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
+          ${hasOverrides ? `
+            <div class="override-box">
+              <div class="two-col">
+                ${this._renderSchedule("Dimming Override", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
+                ${this._renderSchedule("Brightening Override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
+              </div>
+              <div class="field-grid top-gap">
+                <ha-textfield
+                  label="Ramp Duration"
+                  type="number"
+                  min="1"
+                  max="720"
+                  inputmode="numeric"
+                  suffix="min"
+                  data-value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
+                  data-path="lights.${index}.ramp_duration"
+                  data-duration="minutes"
+                ></ha-textfield>
+                <ha-select
+                  label="Override Resume"
+                  data-path="lights.${index}.override_resume_mode"
+                  data-value="${escapeHtml(light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}"
+                >${optionHtml(RESUME_MODES, light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}</ha-select>
+                <ha-textfield
+                  label="Grace Period"
+                  type="number"
+                  min="1"
+                  max="720"
+                  inputmode="numeric"
+                  suffix="min"
+                  data-value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
+                  data-path="lights.${index}.override_grace_period"
+                  data-duration="minutes"
+                ></ha-textfield>
+              </div>
             </div>
-            <div class="field-grid inline-section">
-              <ha-textfield
-                label="Ramp Duration"
-                type="number"
-                min="1"
-                max="720"
-                inputmode="numeric"
-                suffix="min"
-                data-value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
-                data-path="lights.${index}.ramp_duration"
-                data-duration="minutes"
-              ></ha-textfield>
-              <ha-select
-                label="Override Resume"
-                data-path="lights.${index}.override_resume_mode"
-                data-value="${escapeHtml(light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}"
-              >${optionHtml(RESUME_MODES, light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}</ha-select>
-              <ha-textfield
-                label="Grace Period"
-                type="number"
-                min="1"
-                max="720"
-                inputmode="numeric"
-                suffix="min"
-                data-value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
-                data-path="lights.${index}.override_grace_period"
-                data-duration="minutes"
-              ></ha-textfield>
-            </div>
-          </section>
-        ` : ""}
+          ` : ""}
         </div>
       </ha-card>
     `;
@@ -572,46 +650,96 @@ class DimsomePanel extends HTMLElement {
 
   _render() {
     if (!this.shadowRoot) return;
+
     if (!this._loaded) {
-      this.shadowRoot.innerHTML = `${this._styles()}<main><ha-card><div class="center-state"><ha-circular-progress active></ha-circular-progress><p>Loading Dimsome…</p></div></ha-card></main>`;
+      this.shadowRoot.innerHTML = `
+        ${this._styles()}
+        <div class="panel-toolbar">
+          <div class="panel-title">Dimsome</div>
+        </div>
+        <div class="center-state-wrap">
+          <div class="center-state">
+            <ha-circular-progress active></ha-circular-progress>
+            <p>Loading Dimsome…</p>
+          </div>
+        </div>
+      `;
+      this._hydrateNativeComponents();
       return;
     }
 
     if (!this._configured) {
-      this.shadowRoot.innerHTML = `${this._styles()}<main><ha-card><div class="card-content"><h1>Dimsome</h1><p>Dimsome is not set up yet. Add it from Settings &gt; Devices &amp; Services &gt; Add Integration &gt; Dimsome.</p><p><a href="/config/integrations">Open Integrations</a></p></div></ha-card></main>`;
+      this.shadowRoot.innerHTML = `
+        ${this._styles()}
+        <div class="panel-toolbar">
+          <div class="panel-title">Dimsome</div>
+        </div>
+        <div class="center-state-wrap">
+          <div class="center-state">
+            <ha-icon icon="mdi:brightness-6" class="empty-icon"></ha-icon>
+            <h2>Not Configured</h2>
+            <p>Add Dimsome from Settings &gt; Devices &amp; Services &gt; Add Integration.</p>
+            <a href="/config/integrations">Open Integrations</a>
+          </div>
+        </div>
+      `;
+      this._hydrateNativeComponents();
       return;
     }
 
     this.shadowRoot.innerHTML = `
       ${this._styles()}
-      <main>
-        <header class="page-header">
-          <div>
-            <h1>Dimsome</h1>
-            <p>Configure adaptive dimming without leaving Home Assistant.</p>
-          </div>
-          <div class="toolbar">
-            <ha-button variant="neutral" data-action="reload">Reload</ha-button>
-            <ha-button variant="neutral" data-action="resume">Resume All</ha-button>
-            <ha-button data-action="save" ${this._saving ? "disabled loading" : ""}>Save</ha-button>
-          </div>
-        </header>
+      <div class="panel-toolbar">
+        <div class="panel-title">Dimsome</div>
+        <div class="panel-actions">
+          <ha-icon-button
+            label="Reload config"
+            title="Reload"
+            data-action="reload"
+          ></ha-icon-button>
+          <ha-icon-button
+            label="Resume all lights"
+            title="Resume All"
+            data-action="resume"
+          ></ha-icon-button>
+          <ha-icon-button
+            label="Save configuration"
+            title="Save"
+            data-action="save"
+            ${this._saving ? "disabled" : ""}
+          ></ha-icon-button>
+        </div>
+      </div>
+
+      <main class="page-body">
         <div class="announcements" aria-live="polite">
           ${this._error ? `<ha-alert alert-type="error">${escapeHtml(this._error)}</ha-alert>` : ""}
           ${this._message ? `<ha-alert alert-type="success">${escapeHtml(this._message)}</ha-alert>` : ""}
         </div>
+
         <section class="panel-grid">
           ${this._renderGlobal()}
         </section>
-        <section class="section-head" aria-labelledby="lights-title">
-          <div>
-            <h2 id="lights-title">Lights</h2>
-            <p>${this._config.lights.length} configured</p>
+
+        <div class="section-head">
+          <h2>Lights</h2>
+          <div class="section-head-actions">
+            <span class="lights-count">${this._config.lights.length} configured</span>
+            <ha-button outlined data-action="add-light">Add Light</ha-button>
           </div>
-          <ha-button variant="neutral" data-action="add-light">Add Light</ha-button>
-        </section>
+        </div>
+
         <section class="lights-list">
-          ${this._config.lights.map((light, index) => this._renderLight(light, index)).join("") || `<ha-card><div class="center-state empty"><ha-icon icon="mdi:lightbulb-outline"></ha-icon><h2>No Lights Yet</h2><p>Add a light to start adaptive dimming.</p><ha-button data-action="add-light">Add Light</ha-button></div></ha-card>`}
+          ${this._config.lights.map((light, index) => this._renderLight(light, index)).join("") || `
+            <ha-card>
+              <div class="center-state">
+                <ha-icon icon="mdi:lightbulb-outline" class="empty-icon"></ha-icon>
+                <h2>No Lights Yet</h2>
+                <p>Add a light to start adaptive dimming.</p>
+                <ha-button data-action="add-light">Add Light</ha-button>
+              </div>
+            </ha-card>
+          `}
         </section>
       </main>
     `;
@@ -626,47 +754,61 @@ class DimsomePanel extends HTMLElement {
           color: var(--primary-text-color);
         }
 
-        main {
+        /* ── Toolbar ─────────────────────────────────────────────────── */
+        .panel-toolbar {
+          --icon-primary-color: var(--app-header-text-color, var(--text-primary-color));
+          align-items: center;
+          background-color: var(--app-header-background-color, var(--primary-color));
+          color: var(--app-header-text-color, var(--text-primary-color));
+          display: flex;
+          height: 64px;
+          padding-inline-end: 4px;
+          position: sticky;
+          top: 0;
+          z-index: 4;
+        }
+
+        .panel-title {
+          flex: 1;
+          font-size: var(--mdc-typography-headline6-font-size, 1.25rem);
+          font-weight: var(--mdc-typography-headline6-font-weight, 500);
+          letter-spacing: 0.0125em;
+          overflow: hidden;
+          padding: 0 16px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .panel-actions {
+          align-items: center;
+          display: flex;
+        }
+
+        /* ── Page body ───────────────────────────────────────────────── */
+        .page-body {
           box-sizing: border-box;
           max-width: 1120px;
           margin: 0 auto;
-          padding: 24px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
+          padding: 16px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
         }
 
-        h1,
+        /* Reset bare elements — shadow DOM doesn't inherit HA globals */
         h2,
         h3,
         p {
           margin: 0;
         }
 
-        h1 {
-          font-size: 32px;
-          font-weight: 600;
-          letter-spacing: -0.02em;
-          line-height: 1.15;
-        }
+        /* ── Card structure ──────────────────────────────────────────── */
 
-        h2 {
-          font-size: 20px;
-          font-weight: 500;
-          line-height: 1.3;
-        }
-
-        h3 {
-          font-size: 16px;
-          font-weight: 500;
-          line-height: 1.3;
-        }
-
-        p,
-        .status-line {
-          color: var(--secondary-text-color);
-          margin-top: 4px;
-        }
-
-        a {
-          color: var(--primary-color);
+        /* Replicate ha-card's internal .card-header styling */
+        .card-header {
+          color: var(--ha-card-header-color, var(--primary-text-color));
+          font-size: var(--ha-card-header-font-size, 1.5rem);
+          font-weight: var(--ha-card-header-font-weight, 500);
+          letter-spacing: -0.012em;
+          line-height: 1.2;
+          padding: 20px 16px 12px;
         }
 
         ha-card,
@@ -682,32 +824,59 @@ class DimsomePanel extends HTMLElement {
         }
 
         ha-button,
-        ha-switch {
+        ha-switch,
+        ha-icon-button {
           touch-action: manipulation;
         }
 
-        .page-header,
-        .section-head,
-        .card-header,
-        .light-header {
-          display: flex;
-          align-items: flex-start;
-          justify-content: space-between;
+        .card-content {
+          padding: 16px;
+        }
+
+        /* ── Settings rows ───────────────────────────────────────────── */
+
+        .settings-list {
+          margin-top: 8px;
+        }
+
+        .settings-row {
+          align-items: center;
+          border-top: 1px solid var(--divider-color);
+          display: grid;
           gap: 16px;
+          grid-template-columns: minmax(0, 1fr) minmax(220px, 240px);
+          min-height: 64px;
+          padding: 12px 0;
         }
 
-        .page-header {
-          margin-bottom: 20px;
+        .settings-row:first-child {
+          border-top: none;
         }
 
-        .toolbar,
-        .actions {
+        .settings-label {
+          min-width: 0;
+        }
+
+        .settings-heading {
+          font-weight: 500;
+          line-height: 1.4;
+        }
+
+        .settings-description {
+          color: var(--secondary-text-color);
+          font-size: 0.875rem;
+          line-height: 1.4;
+          margin-top: 2px;
+        }
+
+        .settings-control {
+          align-items: center;
           display: flex;
-          flex-wrap: wrap;
           justify-content: flex-end;
-          gap: 8px;
+          min-width: 0;
         }
 
+        /* ── Layout ──────────────────────────────────────────────────── */
         .announcements {
           display: grid;
           gap: 8px;
@@ -721,129 +890,152 @@ class DimsomePanel extends HTMLElement {
         }
 
         .section-head {
+          align-items: center;
+          display: flex;
+          gap: 16px;
+          justify-content: space-between;
           margin: 24px 0 12px;
         }
 
-        .card-header {
-          padding: 16px 16px 0;
+        .section-head h2 {
+          color: var(--secondary-text-color);
+          font-size: 0.75rem;
+          font-weight: 500;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
         }
 
-        .card-content {
-          padding: 16px;
+        .section-head-actions {
+          align-items: center;
+          display: flex;
+          gap: 12px;
         }
 
+        .lights-count {
+          color: var(--secondary-text-color);
+          font-size: 0.875rem;
+        }
+
+        /* ── Field grids ─────────────────────────────────────────────── */
+        /* align-items: start prevents shorter inputs from stretching to match
+           taller siblings (e.g. ha-selector[type=time] with its 3-box layout). */
         .two-col,
         .field-grid {
+          align-items: start;
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
           gap: 16px;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
         }
 
         .field-grid.compact {
           grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
         }
 
-        .schedule-card,
-        .override-box {
-          border: 1px solid var(--divider-color);
+        .field-wrap {
+          display: grid;
+          gap: 6px;
+          min-width: 0;
+        }
+
+        .field-label {
+          color: var(--primary-text-color);
+          font-size: 0.875rem;
+          font-weight: 500;
+          line-height: 1.25;
+        }
+
+        .top-gap {
+          margin-top: 16px;
+        }
+
+        /* ── Schedule sub-card ───────────────────────────────────────── */
+        .schedule-card {
+          background: var(--secondary-background-color);
+          border: 1px solid var(--ha-card-border-color, var(--divider-color));
           border-radius: var(--ha-card-border-radius, 12px);
           padding: 16px;
         }
 
-        .section-title {
+        .schedule-title {
+          color: var(--secondary-text-color);
+          font-size: 0.875rem;
+          font-weight: 500;
           margin-bottom: 12px;
         }
 
-        .settings-list {
-          display: grid;
-          gap: 0;
-          margin-top: 8px;
-        }
-
-        .setting-row {
-          align-items: center;
-          border-top: 1px solid var(--divider-color);
-          display: grid;
-          gap: 16px;
-          grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-          min-height: 72px;
-          padding: 12px 0;
-        }
-
-        .setting-row:first-child {
-          border-top: 0;
-        }
-
-        .setting-row.slim {
-          min-height: 56px;
-        }
-
-        .setting-title {
-          font-weight: 500;
-          line-height: 1.4;
-        }
-
-        .setting-description {
-          color: var(--secondary-text-color);
-          line-height: 1.4;
-          margin-top: 2px;
-        }
-
-        .setting-control {
-          align-items: center;
-          display: flex;
-          justify-content: flex-end;
-          min-width: 0;
-        }
-
-        .setting-control ha-switch {
-          flex: 0 0 auto;
-        }
-
-        .compact-list {
-          border-top: 1px solid var(--divider-color);
-          margin-top: 16px;
-        }
-
-        .inline-section,
+        /* ── Per-light override box ──────────────────────────────────── */
+        /* Negative margin cancels card-content's 16px padding so the field-grid
+           inside starts at the same x-position as the main field-grid above. */
         .override-box {
-          margin-top: 16px;
+          background: var(--secondary-background-color);
+          border-top: 1px solid var(--divider-color);
+          margin: 0 -16px;
+          padding: 16px;
+        }
+
+        /* ── Light card header ───────────────────────────────────────── */
+        .light-header-row {
+          align-items: flex-start;
+          display: flex;
+          gap: 16px;
+          justify-content: space-between;
         }
 
         .entity-title {
-          display: flex;
           align-items: center;
+          display: flex;
+          flex: 1;
           gap: 12px;
           min-width: 0;
         }
 
         .entity-icon {
           align-items: center;
-          background: var(--primary-background-color);
-          border-radius: 50%;
-          display: inline-flex;
+          display: flex;
           flex: 0 0 40px;
           height: 40px;
           justify-content: center;
           width: 40px;
         }
 
-        .entity-title h2,
-        .status-line {
+        .entity-info {
+          min-width: 0;
+        }
+
+        .entity-name {
+          font-weight: 500;
           overflow-wrap: anywhere;
         }
 
         .status-line {
+          color: var(--secondary-text-color);
+          font-size: 0.875rem;
           font-variant-numeric: tabular-nums;
+          margin-top: 2px;
+          overflow-wrap: anywhere;
         }
 
-        .danger {
-          --mdc-theme-primary: var(--error-color);
+        .light-actions {
+          align-items: center;
+          display: flex;
+          flex-shrink: 0;
+          gap: 4px;
+        }
+
+        .remove-btn {
+          color: var(--error-color);
+        }
+
+        /* ── Center states ───────────────────────────────────────────── */
+        .center-state-wrap {
+          align-items: center;
+          display: flex;
+          justify-content: center;
+          min-height: 60vh;
         }
 
         .center-state {
           align-items: center;
-          color: var(--secondary-text-color);
           display: grid;
           gap: 12px;
           justify-items: center;
@@ -853,11 +1045,22 @@ class DimsomePanel extends HTMLElement {
 
         .center-state h2 {
           color: var(--primary-text-color);
+          font-size: 1.25rem;
+          font-weight: 500;
         }
 
-        .empty ha-icon {
+        .center-state p {
+          color: var(--secondary-text-color);
+        }
+
+        .empty-icon {
           color: var(--secondary-text-color);
           --mdc-icon-size: 40px;
+        }
+
+        a {
+          color: var(--primary-color);
+          text-decoration: none;
         }
 
         :focus-visible {
@@ -865,20 +1068,13 @@ class DimsomePanel extends HTMLElement {
           outline-offset: 3px;
         }
 
+        /* ── Mobile ──────────────────────────────────────────────────── */
         @media (max-width: 720px) {
-          main {
-            padding-top: 16px;
-          }
-
-          .page-header,
-          .section-head,
-          .card-header,
-          .light-header {
+          .light-header-row {
             display: grid;
           }
 
-          .toolbar,
-          .actions {
+          .light-actions {
             justify-content: flex-start;
           }
 
@@ -888,13 +1084,16 @@ class DimsomePanel extends HTMLElement {
             grid-template-columns: 1fr;
           }
 
-          .setting-row {
-            align-items: stretch;
-            grid-template-columns: 1fr;
-            gap: 10px;
+          .section-head {
+            flex-wrap: wrap;
           }
 
-          .setting-control {
+          .settings-row {
+            grid-template-columns: 1fr;
+            min-height: auto;
+          }
+
+          .settings-control {
             justify-content: flex-start;
           }
         }

@@ -11,6 +11,7 @@ from .const import (
     CONF_ENTITY_ID,
     CONF_BRIGHTEN_SCHEDULE,
     CONF_DIM_SCHEDULE,
+    CONF_ENABLED,
     CONF_GLOBAL,
     CONF_LIGHTS,
     CONF_MAX_BRIGHTNESS_PCT,
@@ -19,6 +20,7 @@ from .const import (
     CONF_MIN_COLOR,
     CONF_OVERRIDE_GRACE_PERIOD,
     CONF_OVERRIDE_RESUME_MODE,
+    CONF_APPLY_ON_RECOVERED_ON,
     CONF_RAMP_DURATION,
     CONF_SPLIT_TURN_ON_CALLS,
 )
@@ -80,6 +82,7 @@ class ResolvedLightConfig:
     """Effective configuration for one controlled light."""
 
     entity_id: str
+    enabled: bool
     min_brightness_pct: int
     max_brightness_pct: int
     min_color: ColorTarget | None
@@ -90,6 +93,7 @@ class ResolvedLightConfig:
     override_resume_mode: OverrideResumeMode
     override_grace_period: timedelta | None
     split_turn_on_calls: bool
+    apply_on_recovered_on: bool
 
 
 @dataclass(frozen=True)
@@ -230,6 +234,7 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
         resolved.append(
             ResolvedLightConfig(
                 entity_id=entity_id,
+                enabled=bool(light.get(CONF_ENABLED, True)),
                 min_brightness_pct=min_brightness,
                 max_brightness_pct=max_brightness,
                 min_color=parse_color(light.get(CONF_MIN_COLOR)),
@@ -249,6 +254,12 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                     light.get(
                         CONF_SPLIT_TURN_ON_CALLS,
                         global_config.get(CONF_SPLIT_TURN_ON_CALLS, False),
+                    )
+                ),
+                apply_on_recovered_on=bool(
+                    light.get(
+                        CONF_APPLY_ON_RECOVERED_ON,
+                        global_config.get(CONF_APPLY_ON_RECOVERED_ON, True),
                     )
                 ),
             )

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime, timedelta
 from collections.abc import Collection
+from dataclasses import replace
+from datetime import datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -29,7 +31,11 @@ from .engine import (
     active_window,
     brightness_pct_to_ha,
     next_window_start,
+    reconstructed_civil_samples,
     should_ignore_state_change,
+    should_skip_for_manual_override,
+    should_stand_down_for_context,
+    split_turn_on_service_data,
     target_for_now,
 )
 from .models import (
@@ -48,7 +54,13 @@ _LOGGER = logging.getLogger(__name__)
 RAMP_INTERVAL = timedelta(seconds=15)
 IGNORE_UPDATE_WINDOW = timedelta(seconds=3)
 SUN_ENTITY_ID = "sun.sun"
+SUN_ATTR_NEXT_DAWN = "next_dawn"
+SUN_ATTR_NEXT_DUSK = "next_dusk"
 RESUME_SERVICE_SCHEMA = vol.Schema({vol.Optional(ATTR_ENTITY_ID): cv.entity_ids})
+AUTOMATION_TRIGGERED_EVENT = "automation_triggered"
+SCRIPT_STARTED_EVENT = "script_started"
+MAX_AUTOMATION_CONTEXTS = 128
+SPLIT_TURN_ON_DELAY = 1.0
 
 
 class DimsomeController:
@@ -70,6 +82,7 @@ class DimsomeController:
         self._ramp_unsub: Any | None = None
         self._wake_unsub: Any | None = None
         self._sun_samples: list[SunElevationSample] = []
+        self._automation_context_ids: list[str] = []
 
     async def async_start(self) -> None:
         """Start listeners and reconstruct current phase."""
@@ -78,6 +91,16 @@ class DimsomeController:
         self._unsubs.append(
             async_track_state_change_event(
                 self.hass, list(self.lights), self._async_light_changed
+            )
+        )
+        self._unsubs.append(
+            self.hass.bus.async_listen(
+                AUTOMATION_TRIGGERED_EVENT, self._async_automation_or_script_started
+            )
+        )
+        self._unsubs.append(
+            self.hass.bus.async_listen(
+                SCRIPT_STARTED_EVENT, self._async_automation_or_script_started
             )
         )
         if any(
@@ -114,9 +137,27 @@ class DimsomeController:
             if entity_id not in selected:
                 continue
             runtime.stood_down = False
+            runtime.last_target = None
+            runtime.pending_target = None
+            runtime.expected_target = None
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
                 runtime.grace_unsub = None
+        await self.async_tick()
+
+    async def async_set_enabled(self, entity_id: str, enabled: bool) -> None:
+        """Enable or indefinitely pause Dimsome control for one light."""
+        runtime = self.lights[entity_id]
+        runtime.config = replace(runtime.config, enabled=enabled)
+        runtime.last_target = None
+        runtime.pending_target = None
+        if not enabled:
+            runtime.stood_down = True
+            if runtime.grace_unsub is not None:
+                runtime.grace_unsub()
+                runtime.grace_unsub = None
+        else:
+            runtime.stood_down = False
         await self.async_tick()
 
     async def async_tick(self, *_: Any) -> None:
@@ -125,6 +166,9 @@ class DimsomeController:
         any_active = False
         next_start = None
         for runtime in self.lights.values():
+            if not runtime.config.enabled:
+                runtime.last_target = None
+                continue
             state = self.hass.states.get(runtime.config.entity_id)
             window = active_window(runtime.config, now, self._sun_samples)
             candidate_start = next_window_start(runtime.config, now, self._sun_samples)
@@ -140,7 +184,9 @@ class DimsomeController:
                 any_active = True
             if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF):
                 continue
-            if runtime.stood_down:
+            if should_skip_for_manual_override(
+                stood_down=runtime.stood_down, window=window
+            ):
                 continue
             await self._async_apply_target(runtime, target)
 
@@ -178,9 +224,22 @@ class DimsomeController:
         """Handle controlled light state changes."""
         entity_id = event.data[ATTR_ENTITY_ID]
         runtime = self.lights[entity_id]
+        if not runtime.config.enabled:
+            return
         old_state: State | None = event.data.get("old_state")
         new_state: State | None = event.data.get("new_state")
         if new_state is None:
+            return
+
+        if (
+            runtime.config.apply_on_recovered_on
+            and old_state is not None
+            and old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            and new_state.state == STATE_ON
+        ):
+            runtime.stood_down = False
+            runtime.last_target = None
+            self.hass.async_create_task(self._async_handle_turn_on(runtime))
             return
 
         if old_state is not None and old_state.state == STATE_OFF and new_state.state == STATE_ON:
@@ -205,9 +264,23 @@ class DimsomeController:
         window = active_window(runtime.config, now, self._sun_samples)
         if window is None:
             return
+        if not should_stand_down_for_context(
+            new_state.context, set(self._automation_context_ids)
+        ):
+            _LOGGER.debug("Ignoring automation-originated change for %s", entity_id)
+            return
         runtime.stood_down = True
         _LOGGER.debug("Standing down %s after external light change", entity_id)
         self._schedule_grace_resume(runtime)
+
+    @callback
+    def _async_automation_or_script_started(self, event: Event) -> None:
+        """Remember automation/script contexts so they do not stop active ramps."""
+        context_id = event.context.id
+        if context_id is None:
+            return
+        self._automation_context_ids.append(context_id)
+        del self._automation_context_ids[:-MAX_AUTOMATION_CONTEXTS]
 
     @callback
     def _async_sun_changed(self, event: Event) -> None:
@@ -274,15 +347,14 @@ class DimsomeController:
         }
         color_data = color_service_data(target)
         if color_data and runtime.config.split_turn_on_calls:
-            await self.hass.services.async_call(
-                LIGHT_DOMAIN, "turn_on", base_data, blocking=True
-            )
-            await self.hass.services.async_call(
-                LIGHT_DOMAIN,
-                "turn_on",
-                {ATTR_ENTITY_ID: runtime.config.entity_id, **color_data},
-                blocking=True,
-            )
+            for index, data in enumerate(
+                split_turn_on_service_data(runtime.config.entity_id, target)
+            ):
+                if index > 0:
+                    await asyncio.sleep(SPLIT_TURN_ON_DELAY)
+                await self.hass.services.async_call(
+                    LIGHT_DOMAIN, "turn_on", data, blocking=True
+                )
             return
         await self.hass.services.async_call(
             LIGHT_DOMAIN,
@@ -316,6 +388,7 @@ class DimsomeController:
         elevation = _state_elevation(state)
         if elevation is None:
             return
+        self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
         self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))
         cutoff = dt_util.now() - timedelta(days=2)
         self._sun_samples = [sample for sample in self._sun_samples if sample.at >= cutoff]
@@ -356,6 +429,19 @@ def _state_elevation(state: State | None) -> float | None:
         return float(elevation)
     except (TypeError, ValueError):
         return None
+
+
+def _reconstructed_civil_samples(
+    state: State | None, elevation: float
+) -> list[SunElevationSample]:
+    """Reconstruct the last civil crossing exposed by sun.sun after reload."""
+    if state is None:
+        return []
+    return reconstructed_civil_samples(
+        elevation=elevation,
+        next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
+        next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
+    )
 
 
 async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:

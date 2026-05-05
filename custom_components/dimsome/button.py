@@ -19,7 +19,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Dimsome button entities."""
-    async_add_entities([DimsomeResumeButton(entry.runtime_data, entry.entry_id)])
+    controller = entry.runtime_data
+    async_add_entities(
+        [DimsomeResumeButton(controller, entry.entry_id)]
+        + [
+            DimsomeLightResumeButton(controller, entry.entry_id, entity_id)
+            for entity_id in controller.lights
+        ]
+    )
 
 
 class DimsomeResumeButton(ButtonEntity):
@@ -40,3 +47,27 @@ class DimsomeResumeButton(ButtonEntity):
     async def async_press(self) -> None:
         """Resume all Dimsome-controlled lights in this entry."""
         await self._controller.async_resume()
+
+
+class DimsomeLightResumeButton(ButtonEntity):
+    """Resume one light controlled by Dimsome."""
+
+    _attr_translation_key = "resume"
+
+    def __init__(
+        self, controller: DimsomeController, entry_id: str, entity_id: str
+    ) -> None:
+        """Initialize the button."""
+        self._controller = controller
+        self._entity_id = entity_id
+        self._attr_name = f"{entity_id} Resume"
+        self._attr_unique_id = f"{entry_id}_{_entity_slug(entity_id)}_resume"
+
+    async def async_press(self) -> None:
+        """Resume Dimsome control for this light."""
+        await self._controller.async_resume({self._entity_id})
+
+
+def _entity_slug(entity_id: str) -> str:
+    """Return a stable unique-id fragment for an entity id."""
+    return entity_id.replace(".", "_")

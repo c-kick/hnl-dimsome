@@ -1,14 +1,15 @@
 """Constants for the Dimsome integration."""
 
 DOMAIN = "dimsome"
-VERSION = "0.1.5"
-PLATFORMS = ["button"]
+VERSION = "0.2.1"
+PLATFORMS = ["button", "switch"]
 
 SERVICE_RESUME = "resume"
 
 CONF_LIGHTS = "lights"
 CONF_GLOBAL = "global"
 CONF_ENTITY_ID = "entity_id"
+CONF_ENABLED = "enabled"
 CONF_MIN_BRIGHTNESS_PCT = "min_brightness_pct"
 CONF_MAX_BRIGHTNESS_PCT = "max_brightness_pct"
 CONF_MIN_COLOR = "min_color"
@@ -19,3 +20,4 @@ CONF_RAMP_DURATION = "ramp_duration"
 CONF_OVERRIDE_RESUME_MODE = "override_resume_mode"
 CONF_OVERRIDE_GRACE_PERIOD = "override_grace_period"
 CONF_SPLIT_TURN_ON_CALLS = "split_turn_on_calls"
+CONF_APPLY_ON_RECOVERED_ON = "apply_on_recovered_on"

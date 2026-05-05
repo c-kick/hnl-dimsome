@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from math import isclose
+from typing import Any
 
 from .models import (
     ColorMode,
@@ -53,6 +54,24 @@ def brightness_ha_to_pct(value: int | None) -> int | None:
     return max(1, min(100, round(value * 100 / 255)))
 
 
+def split_turn_on_service_data(
+    entity_id: str, target: LightTarget
+) -> list[dict[str, object]]:
+    """Return split light.turn_on payloads with brightness applied last."""
+    brightness_data: dict[str, object] = {
+        "entity_id": entity_id,
+        "brightness": brightness_pct_to_ha(target.brightness_pct),
+    }
+    if target.color is None:
+        return [brightness_data]
+    if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
+        return [
+            {"entity_id": entity_id, ColorMode.COLOR_TEMP_KELVIN.value: target.color.value},
+            brightness_data,
+        ]
+    return [brightness_data]
+
+
 def civil_event_time(
     samples: list[SunElevationSample], event: SunEvent
 ) -> datetime | None:
@@ -84,6 +103,26 @@ def civil_event_time(
         )
         return previous.at + (sample.at - previous.at) * ratio
     return None
+
+
+def reconstructed_civil_samples(
+    *, elevation: float, next_dawn: object, next_dusk: object
+) -> list[SunElevationSample]:
+    """Reconstruct the last civil crossing from sun.sun's next event attributes."""
+    is_after_dusk = elevation < CIVIL_ELEVATION
+    value = next_dusk if is_after_dusk else next_dawn
+    if not isinstance(value, str):
+        return []
+    try:
+        next_event = datetime.fromisoformat(value)
+    except ValueError:
+        return []
+    previous_event = next_event - timedelta(days=1)
+    before_elevation = CIVIL_ELEVATION + 1 if is_after_dusk else CIVIL_ELEVATION - 1
+    return [
+        SunElevationSample(previous_event - timedelta(seconds=1), before_elevation),
+        SunElevationSample(previous_event, CIVIL_ELEVATION),
+    ]
 
 
 def schedule_start(
@@ -170,6 +209,20 @@ def is_low_plateau(
     return previous_windows[-1].sequence is SequenceKind.DIM
 
 
+def is_high_plateau(
+    config: ResolvedLightConfig,
+    now: datetime,
+    sun_samples: list[SunElevationSample],
+) -> bool:
+    """Return whether now is after brightening and before dimming."""
+    previous_windows = [
+        window for window in candidate_windows(config, now, sun_samples) if window.end <= now
+    ]
+    if not previous_windows:
+        return False
+    return previous_windows[-1].sequence is SequenceKind.BRIGHTEN
+
+
 def interpolate(start: int, end: int, progress: float) -> int:
     """Linearly interpolate integers."""
     return round(start + (end - start) * max(0.0, min(1.0, progress)))
@@ -196,6 +249,11 @@ def low_plateau_target(config: ResolvedLightConfig) -> LightTarget:
     return LightTarget(config.min_brightness_pct, config.min_color)
 
 
+def high_plateau_target(config: ResolvedLightConfig) -> LightTarget:
+    """Return the target for the high plateau."""
+    return LightTarget(config.max_brightness_pct, config.max_color)
+
+
 def target_for_now(
     config: ResolvedLightConfig,
     now: datetime,
@@ -207,6 +265,8 @@ def target_for_now(
         return target_for_window(config, window, now)
     if is_low_plateau(config, now, sun_samples):
         return low_plateau_target(config)
+    if is_high_plateau(config, now, sun_samples):
+        return high_plateau_target(config)
     return None
 
 
@@ -254,3 +314,24 @@ def should_ignore_state_change(
     if expected_target is None:
         return True
     return target_matches_state(expected_target, attrs)
+
+
+def should_stand_down_for_context(
+    context: Any, automation_context_ids: set[str]
+) -> bool:
+    """Return whether an external state change should be treated as manual."""
+    user_id = getattr(context, "user_id", None)
+    if user_id is not None:
+        return True
+    context_id = getattr(context, "id", None)
+    parent_id = getattr(context, "parent_id", None)
+    if context_id in automation_context_ids or parent_id in automation_context_ids:
+        return False
+    return True
+
+
+def should_skip_for_manual_override(
+    *, stood_down: bool, window: RampWindow | None
+) -> bool:
+    """Return whether a manual override should defer Dimsome's current target."""
+    return stood_down and window is not None
