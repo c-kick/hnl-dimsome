@@ -119,6 +119,7 @@ class LightRuntime:
 
     config: ResolvedLightConfig
     stood_down: bool = False
+    stood_down_window: RampWindow | None = None
     ignore_updates_until: datetime | None = None
     expected_target: LightTarget | None = None
     last_target: LightTarget | None = None

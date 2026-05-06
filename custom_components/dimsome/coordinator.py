@@ -32,6 +32,7 @@ from .engine import (
     brightness_pct_to_ha,
     next_window_start,
     reconstructed_civil_samples,
+    should_clear_manual_override_for_window,
     should_ignore_state_change,
     should_skip_for_manual_override,
     should_stand_down_for_context,
@@ -43,6 +44,7 @@ from .models import (
     LightRuntime,
     LightTarget,
     OverrideResumeMode,
+    RampWindow,
     ResolvedLightConfig,
     ScheduleType,
     SequenceKind,
@@ -137,6 +139,7 @@ class DimsomeController:
             if entity_id not in selected:
                 continue
             runtime.stood_down = False
+            runtime.stood_down_window = None
             runtime.last_target = None
             runtime.pending_target = None
             runtime.expected_target = None
@@ -153,12 +156,64 @@ class DimsomeController:
         runtime.pending_target = None
         if not enabled:
             runtime.stood_down = True
+            runtime.stood_down_window = None
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
                 runtime.grace_unsub = None
         else:
             runtime.stood_down = False
+            runtime.stood_down_window = None
         await self.async_tick()
+
+    def runtime_status(self, entity_id: str | None = None) -> dict[str, Any]:
+        """Return diagnostic runtime state for one light or all lights."""
+        now = dt_util.now()
+        selected = (
+            {entity_id: self.lights[entity_id]}
+            if entity_id is not None
+            else self.lights
+        )
+        return {
+            light_entity_id: self._runtime_status_for_light(runtime, now)
+            for light_entity_id, runtime in selected.items()
+        }
+
+    def _runtime_status_for_light(
+        self, runtime: LightRuntime, now: datetime
+    ) -> dict[str, Any]:
+        """Return diagnostic runtime state for one light."""
+        window = active_window(runtime.config, now, self._sun_samples)
+        target = target_for_now(runtime.config, now, self._sun_samples)
+        return {
+            "enabled": runtime.config.enabled,
+            "status": self._status_for_runtime(runtime, window),
+            "stood_down": runtime.stood_down,
+            "stood_down_window": _window_status(runtime.stood_down_window),
+            "active_window": _window_status(window),
+            "next_window_start": _datetime_status(
+                next_window_start(runtime.config, now, self._sun_samples)
+            ),
+            "target": _target_status(target),
+            "last_target": _target_status(runtime.last_target),
+            "expected_target": _target_status(runtime.expected_target),
+            "pending_target": _target_status(runtime.pending_target),
+            "in_flight": runtime.in_flight,
+            "ignore_updates_until": _datetime_status(runtime.ignore_updates_until),
+        }
+
+    def _status_for_runtime(
+        self, runtime: LightRuntime, window: RampWindow | None
+    ) -> str:
+        """Return a concise human-readable runtime status."""
+        if not runtime.config.enabled:
+            return "disabled"
+        if runtime.stood_down and window is not None:
+            return "manual_override"
+        if window is not None:
+            return "ramping"
+        if runtime.stood_down:
+            return "stood_down"
+        return "tracking"
 
     async def async_tick(self, *_: Any) -> None:
         """Apply current targets and manage the active ramp timer."""
@@ -171,6 +226,16 @@ class DimsomeController:
                 continue
             state = self.hass.states.get(runtime.config.entity_id)
             window = active_window(runtime.config, now, self._sun_samples)
+            if should_clear_manual_override_for_window(
+                stood_down=runtime.stood_down,
+                stood_down_window=runtime.stood_down_window,
+                window=window,
+            ):
+                runtime.stood_down = False
+                runtime.stood_down_window = None
+                _LOGGER.debug(
+                    "Resuming %s for new ramp window", runtime.config.entity_id
+                )
             candidate_start = next_window_start(runtime.config, now, self._sun_samples)
             if candidate_start is not None and (
                 next_start is None or candidate_start < next_start
@@ -183,10 +248,19 @@ class DimsomeController:
             if window is not None:
                 any_active = True
             if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, STATE_OFF):
+                _LOGGER.debug(
+                    "Skipping %s because state is %s",
+                    runtime.config.entity_id,
+                    state.state if state is not None else None,
+                )
                 continue
             if should_skip_for_manual_override(
                 stood_down=runtime.stood_down, window=window
             ):
+                _LOGGER.debug(
+                    "Skipping %s because it is stood down for the active ramp",
+                    runtime.config.entity_id,
+                )
                 continue
             await self._async_apply_target(runtime, target)
 
@@ -238,12 +312,14 @@ class DimsomeController:
             and new_state.state == STATE_ON
         ):
             runtime.stood_down = False
+            runtime.stood_down_window = None
             runtime.last_target = None
             self.hass.async_create_task(self._async_handle_turn_on(runtime))
             return
 
         if old_state is not None and old_state.state == STATE_OFF and new_state.state == STATE_ON:
             runtime.stood_down = False
+            runtime.stood_down_window = None
             runtime.last_target = None
             self.hass.async_create_task(self._async_handle_turn_on(runtime))
             return
@@ -270,6 +346,7 @@ class DimsomeController:
             _LOGGER.debug("Ignoring automation-originated change for %s", entity_id)
             return
         runtime.stood_down = True
+        runtime.stood_down_window = window
         _LOGGER.debug("Standing down %s after external light change", entity_id)
         self._schedule_grace_resume(runtime)
 
@@ -322,8 +399,16 @@ class DimsomeController:
         if runtime.last_target == target:
             return
         if runtime.in_flight:
+            _LOGGER.debug(
+                "Queueing pending Dimsome target for %s: %s",
+                runtime.config.entity_id,
+                target,
+            )
             runtime.pending_target = target
             return
+        _LOGGER.debug(
+            "Applying Dimsome target for %s: %s", runtime.config.entity_id, target
+        )
         runtime.in_flight = True
         runtime.expected_target = target
         runtime.ignore_updates_until = dt_util.now() + IGNORE_UPDATE_WINDOW
@@ -376,6 +461,7 @@ class DimsomeController:
 
         async def _resume(_: Any) -> None:
             runtime.stood_down = False
+            runtime.stood_down_window = None
             runtime.grace_unsub = None
             await self.async_tick()
 
@@ -401,6 +487,40 @@ def color_service_data(target: LightTarget) -> dict[str, Any]:
     if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
         return {ColorMode.COLOR_TEMP_KELVIN.value: target.color.value}
     return {}
+
+
+def _datetime_status(value: datetime | None) -> str | None:
+    """Return an ISO timestamp for diagnostic output."""
+    return value.isoformat() if value is not None else None
+
+
+def _target_status(target: LightTarget | None) -> dict[str, Any] | None:
+    """Return serializable target diagnostics."""
+    if target is None:
+        return None
+    return {
+        "brightness_pct": target.brightness_pct,
+        "brightness": brightness_pct_to_ha(target.brightness_pct),
+        "color": _color_status(target.color),
+    }
+
+
+def _color_status(color: Any | None) -> dict[str, Any] | None:
+    """Return serializable color diagnostics."""
+    if color is None:
+        return None
+    return {"mode": color.mode.value, "value": color.value}
+
+
+def _window_status(window: RampWindow | None) -> dict[str, str] | None:
+    """Return serializable ramp window diagnostics."""
+    if window is None:
+        return None
+    return {
+        "sequence": window.sequence.value,
+        "start": window.start.isoformat(),
+        "end": window.end.isoformat(),
+    }
 
 
 def uses_civil_schedule(config: ResolvedLightConfig) -> bool:

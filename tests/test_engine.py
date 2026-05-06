@@ -16,6 +16,7 @@ from custom_components.dimsome.engine import (
     is_low_plateau,
     next_window_start,
     reconstructed_civil_samples,
+    should_clear_manual_override_for_window,
     should_ignore_state_change,
     should_skip_for_manual_override,
     should_stand_down_for_context,
@@ -295,6 +296,29 @@ def test_manual_override_only_skips_active_ramp() -> None:
     assert should_skip_for_manual_override(stood_down=True, window=window) is True
     assert should_skip_for_manual_override(stood_down=True, window=None) is False
     assert should_skip_for_manual_override(stood_down=False, window=window) is False
+
+
+def test_manual_override_clears_for_new_ramp_window() -> None:
+    """A stand-down from one ramp should not suppress the next ramp."""
+    dim_window = active_window(
+        fixed_config(), datetime(2026, 5, 4, 22, 30, tzinfo=TZ), []
+    )
+    brighten_window = active_window(
+        fixed_config(), datetime(2026, 5, 5, 6, 30, tzinfo=TZ), []
+    )
+
+    assert dim_window is not None
+    assert brighten_window is not None
+    assert should_clear_manual_override_for_window(
+        stood_down=True,
+        stood_down_window=dim_window,
+        window=brighten_window,
+    )
+    assert not should_clear_manual_override_for_window(
+        stood_down=True,
+        stood_down_window=dim_window,
+        window=dim_window,
+    )
 
 
 def test_split_turn_on_service_data_sends_brightness_last() -> None:

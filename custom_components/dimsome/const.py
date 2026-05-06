@@ -2,7 +2,7 @@
 
 DOMAIN = "dimsome"
 VERSION = "0.2.1"
-PLATFORMS = ["button", "switch"]
+PLATFORMS = ["button", "sensor", "switch"]
 
 SERVICE_RESUME = "resume"
 

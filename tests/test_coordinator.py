@@ -88,6 +88,7 @@ def test_resume_clears_cached_targets(monkeypatch) -> None:
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
     runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
     runtime.stood_down = True
+    runtime.stood_down_window = SimpleNamespace()
     runtime.last_target = LightTarget(50)
     runtime.pending_target = LightTarget(60)
     runtime.expected_target = LightTarget(70)
@@ -101,6 +102,7 @@ def test_resume_clears_cached_targets(monkeypatch) -> None:
     asyncio.run(controller.async_resume({"light.test"}))
 
     assert runtime.stood_down is False
+    assert runtime.stood_down_window is None
     assert runtime.last_target is None
     assert runtime.pending_target is None
     assert runtime.expected_target is None

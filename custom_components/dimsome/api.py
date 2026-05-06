@@ -60,11 +60,17 @@ async def ws_config(hass: HomeAssistant, connection, msg) -> None:
                 "configured": False,
                 "config": {"global": {}, "lights": []},
                 "light_states": {},
+                "runtime": {},
             },
         )
         return
 
     config = _current_config(entry)
+    runtime = (
+        entry.runtime_data.runtime_status()
+        if entry.state is ConfigEntryState.LOADED
+        else {}
+    )
     connection.send_result(
         msg["id"],
         {
@@ -73,6 +79,7 @@ async def ws_config(hass: HomeAssistant, connection, msg) -> None:
             "loaded": entry.state is ConfigEntryState.LOADED,
             "config": config,
             "light_states": _light_states(hass, config),
+            "runtime": runtime,
         },
     )
 

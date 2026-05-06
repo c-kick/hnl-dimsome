@@ -335,3 +335,10 @@ def should_skip_for_manual_override(
 ) -> bool:
     """Return whether a manual override should defer Dimsome's current target."""
     return stood_down and window is not None
+
+
+def should_clear_manual_override_for_window(
+    *, stood_down: bool, stood_down_window: RampWindow | None, window: RampWindow | None
+) -> bool:
+    """Return whether a manual override belongs to an older ramp window."""
+    return stood_down and stood_down_window is not None and stood_down_window != window
