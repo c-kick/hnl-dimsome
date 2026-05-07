@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from custom_components.dimsome.const import DOMAIN, SERVICE_RESUME
-from custom_components.dimsome.models import LightRuntime, LightTarget
+from custom_components.dimsome.models import (
+    ColorMode,
+    ColorTarget,
+    LightRuntime,
+    LightTarget,
+    OverrideResumeMode,
+    ResolvedLightConfig,
+    ScheduleConfig,
+    ScheduleType,
+    SunEvent,
+)
 
 pytest.importorskip("voluptuous")
 
@@ -106,3 +118,91 @@ def test_resume_clears_cached_targets(monkeypatch) -> None:
     assert runtime.last_target is None
     assert runtime.pending_target is None
     assert runtime.expected_target is None
+
+
+def test_turn_on_verification_reapplies_mismatched_target(monkeypatch) -> None:
+    """Turn-on verification must force a retry when restore timing wins."""
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    target = LightTarget(50)
+    runtime.last_target = target
+    controller._sun_samples = []
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                state="on", attributes={"brightness": 254}
+            )
+        )
+    )
+    calls = []
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    async def fake_apply(call_runtime: LightRuntime, call_target: LightTarget) -> None:
+        calls.append((call_runtime, call_target, call_runtime.last_target))
+
+    monkeypatch.setattr(coordinator.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(coordinator, "target_for_now", lambda *_: target)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+
+    asyncio.run(controller._async_verify_turn_on_target(runtime, target))
+
+    assert calls == [(runtime, target, None)]
+
+
+def test_tick_refreshes_civil_sun_samples_from_current_sun_state(monkeypatch) -> None:
+    """A missed sun listener update must not leave civil dusk stuck on high."""
+    now = datetime(2026, 5, 7, 23, 19, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    config = ResolvedLightConfig(
+        entity_id="light.test",
+        enabled=True,
+        min_brightness_pct=30,
+        max_brightness_pct=80,
+        min_color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+        max_color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2450),
+        dim_schedule=ScheduleConfig(ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK),
+        brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:30:00"),
+        ramp_duration=timedelta(hours=1),
+        override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+        override_grace_period=None,
+        split_turn_on_calls=False,
+        apply_on_recovered_on=True,
+    )
+    runtime = LightRuntime(config=config)
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._sun_samples = []
+    controller._ramp_unsub = None
+    controller._wake_unsub = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                state="below_horizon",
+                attributes={
+                    "elevation": -14.32,
+                    "next_dawn": "2026-05-08T03:15:36+00:00",
+                    "next_dusk": "2026-05-08T19:57:27+00:00",
+                },
+            )
+            if entity_id == coordinator.SUN_ENTITY_ID
+            else SimpleNamespace(state="on", attributes={})
+        )
+    )
+    calls = []
+
+    async def fake_apply(_: LightRuntime, target: LightTarget) -> None:
+        calls.append(target)
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+    monkeypatch.setattr(controller, "_schedule_wake_timer", lambda *_: None)
+
+    asyncio.run(controller.async_tick())
+
+    assert calls == [
+        LightTarget(
+            brightness_pct=30,
+            color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+        )
+    ]

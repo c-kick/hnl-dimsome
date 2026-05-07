@@ -37,6 +37,7 @@ from .engine import (
     should_skip_for_manual_override,
     should_stand_down_for_context,
     split_turn_on_service_data,
+    target_matches_state,
     target_for_now,
 )
 from .models import (
@@ -218,6 +219,8 @@ class DimsomeController:
     async def async_tick(self, *_: Any) -> None:
         """Apply current targets and manage the active ramp timer."""
         now = dt_util.now()
+        if any(uses_civil_schedule(runtime.config) for runtime in self.lights.values()):
+            self._record_sun_sample(self.hass.states.get(SUN_ENTITY_ID))
         any_active = False
         next_start = None
         for runtime in self.lights.values():
@@ -391,6 +394,23 @@ class DimsomeController:
         target = target_for_now(runtime.config, now, self._sun_samples)
         if target is not None:
             await self._async_apply_target(runtime, target)
+            await self._async_verify_turn_on_target(runtime, target)
+
+    async def _async_verify_turn_on_target(
+        self, runtime: LightRuntime, target: LightTarget
+    ) -> None:
+        """Reapply turn-on targets that were lost to device restore timing."""
+        await asyncio.sleep(IGNORE_UPDATE_WINDOW.total_seconds())
+        now = dt_util.now()
+        if target_for_now(runtime.config, now, self._sun_samples) != target:
+            return
+        state = self.hass.states.get(runtime.config.entity_id)
+        if state is None or state.state != STATE_ON:
+            return
+        if target_matches_state(target, state.attributes):
+            return
+        runtime.last_target = None
+        await self._async_apply_target(runtime, target)
 
     async def _async_apply_target(
         self, runtime: LightRuntime, target: LightTarget
@@ -477,7 +497,10 @@ class DimsomeController:
         self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
         self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))
         cutoff = dt_util.now() - timedelta(days=2)
-        self._sun_samples = [sample for sample in self._sun_samples if sample.at >= cutoff]
+        self._sun_samples = sorted(
+            (sample for sample in self._sun_samples if sample.at >= cutoff),
+            key=lambda sample: sample.at,
+        )
 
 
 def color_service_data(target: LightTarget) -> dict[str, Any]:

@@ -244,6 +244,36 @@ def test_reconstructed_civil_dusk_produces_low_plateau_target() -> None:
     assert target.brightness_pct == 10
 
 
+def test_civil_schedule_handles_out_of_order_reconstructed_samples() -> None:
+    """Synthetic dusk samples may be appended after later sun updates."""
+    next_dusk = datetime(2026, 5, 8, 19, 57, tzinfo=ZoneInfo("UTC"))
+    now = datetime(2026, 5, 7, 23, 19, tzinfo=TZ)
+    samples = [
+        SunElevationSample(datetime(2026, 5, 7, 21, 13, tzinfo=ZoneInfo("UTC")), -14.32),
+        *reconstructed_civil_samples(
+            elevation=-14.32,
+            next_dawn="2026-05-08T03:15:36+00:00",
+            next_dusk=next_dusk.isoformat(),
+        ),
+    ]
+
+    target = target_for_now(
+        ResolvedLightConfig(
+            **{
+                **fixed_config().__dict__,
+                "dim_schedule": ScheduleConfig(
+                    ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+                ),
+            }
+        ),
+        now,
+        samples,
+    )
+
+    assert target is not None
+    assert target.brightness_pct == 10
+
+
 def test_target_matching_uses_tolerance() -> None:
     """Expected reports tolerate HA/device quantization."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
