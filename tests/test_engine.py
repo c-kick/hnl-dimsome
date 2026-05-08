@@ -292,6 +292,18 @@ def test_target_matching_uses_tolerance() -> None:
     )
 
 
+def test_target_matching_tolerates_missing_kelvin_report() -> None:
+    """Some lights accept kelvin commands but only report brightness back."""
+    target = LightTarget(45, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 3100))
+
+    assert target_matches_state(
+        target,
+        {
+            "brightness": brightness_pct_to_ha(45),
+        },
+    )
+
+
 def test_in_flight_update_is_not_manual_override() -> None:
     """State reports during our service call are ignored even if partial."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)

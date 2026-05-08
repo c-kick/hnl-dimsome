@@ -126,6 +126,8 @@ class LightRuntime:
     in_flight: bool = False
     pending_target: LightTarget | None = None
     grace_unsub: Any | None = None
+    last_decision: str | None = None
+    last_decision_at: datetime | None = None
 
 
 def parse_duration(value: Any, default: timedelta | None = None) -> timedelta | None:

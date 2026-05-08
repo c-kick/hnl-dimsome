@@ -206,3 +206,42 @@ def test_tick_refreshes_civil_sun_samples_from_current_sun_state(monkeypatch) ->
             color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
         )
     ]
+
+
+def test_tick_records_last_decision_for_diagnostics(monkeypatch) -> None:
+    """Runtime diagnostics must explain why a light did or did not dim."""
+    now = datetime(2026, 5, 4, 22, 30, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    runtime = LightRuntime(
+        config=ResolvedLightConfig(
+            entity_id="light.test",
+            enabled=True,
+            min_brightness_pct=10,
+            max_brightness_pct=80,
+            min_color=None,
+            max_color=None,
+            dim_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="22:00"),
+            brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:00"),
+            ramp_duration=timedelta(hours=1),
+            override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+            override_grace_period=None,
+            split_turn_on_calls=False,
+            apply_on_recovered_on=True,
+        )
+    )
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._sun_samples = []
+    controller._ramp_unsub = object()
+    controller._wake_unsub = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(state="off", attributes={})
+        )
+    )
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+
+    asyncio.run(controller.async_tick())
+
+    assert runtime.last_decision == "skipped_state_off"
+    assert runtime.last_decision_at == now

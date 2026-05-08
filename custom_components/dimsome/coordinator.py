@@ -55,7 +55,7 @@ from .models import (
 _LOGGER = logging.getLogger(__name__)
 
 RAMP_INTERVAL = timedelta(seconds=15)
-IGNORE_UPDATE_WINDOW = timedelta(seconds=3)
+IGNORE_UPDATE_WINDOW = timedelta(seconds=10)
 SUN_ENTITY_ID = "sun.sun"
 SUN_ATTR_NEXT_DAWN = "next_dawn"
 SUN_ATTR_NEXT_DUSK = "next_dusk"
@@ -200,6 +200,8 @@ class DimsomeController:
             "pending_target": _target_status(runtime.pending_target),
             "in_flight": runtime.in_flight,
             "ignore_updates_until": _datetime_status(runtime.ignore_updates_until),
+            "last_decision": runtime.last_decision,
+            "last_decision_at": _datetime_status(runtime.last_decision_at),
         }
 
     def _status_for_runtime(
@@ -226,6 +228,7 @@ class DimsomeController:
         for runtime in self.lights.values():
             if not runtime.config.enabled:
                 runtime.last_target = None
+                self._record_decision(runtime, "disabled", now)
                 continue
             state = self.hass.states.get(runtime.config.entity_id)
             window = active_window(runtime.config, now, self._sun_samples)
@@ -247,6 +250,7 @@ class DimsomeController:
             target = target_for_now(runtime.config, now, self._sun_samples)
             if target is None:
                 runtime.last_target = None
+                self._record_decision(runtime, "no_target", now)
                 continue
             if window is not None:
                 any_active = True
@@ -256,6 +260,11 @@ class DimsomeController:
                     runtime.config.entity_id,
                     state.state if state is not None else None,
                 )
+                self._record_decision(
+                    runtime,
+                    f"skipped_state_{state.state if state is not None else 'missing'}",
+                    now,
+                )
                 continue
             if should_skip_for_manual_override(
                 stood_down=runtime.stood_down, window=window
@@ -264,8 +273,10 @@ class DimsomeController:
                     "Skipping %s because it is stood down for the active ramp",
                     runtime.config.entity_id,
                 )
+                self._record_decision(runtime, "skipped_manual_override", now)
                 continue
             await self._async_apply_target(runtime, target)
+            self._record_decision(runtime, "applied_target", now)
 
         if any_active:
             self._cancel_wake_timer()
@@ -501,6 +512,13 @@ class DimsomeController:
             (sample for sample in self._sun_samples if sample.at >= cutoff),
             key=lambda sample: sample.at,
         )
+
+    def _record_decision(
+        self, runtime: LightRuntime, decision: str, at: datetime
+    ) -> None:
+        """Remember the most recent tick decision for diagnostics."""
+        runtime.last_decision = decision
+        runtime.last_decision_at = at
 
 
 def color_service_data(target: LightTarget) -> dict[str, Any]:

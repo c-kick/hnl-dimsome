@@ -293,7 +293,7 @@ def target_matches_state(target: LightTarget, attrs: dict[str, object]) -> bool:
     if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
         current_kelvin = attrs.get("color_temp_kelvin")
         if current_kelvin is None:
-            return False
+            return True
         return abs(int(current_kelvin) - target.color.value) <= COLOR_TEMP_TOLERANCE
     return False
 
