@@ -20,7 +20,7 @@ The integration currently provides the first runtime implementation:
 
 - typed global defaults with per-light overrides
 - fixed-time dim/brighten ramps
-- civil dawn/dusk ramps detected from `sun.sun` elevation crossing `-6.0`
+- civil dawn/dusk ramps from Home Assistant `sun.sun`
 - per-light min/max brightness in percent
 - optional `color_temp_kelvin` interpolation
 - manual override stand-down with tolerance for Dimsome's own updates
@@ -30,6 +30,22 @@ The integration currently provides the first runtime implementation:
 - persistent Dimsome sidebar panel for global defaults plus add/edit/remove light configuration
 
 Create Dimsome from Home Assistant: Settings -> Devices & services -> Add integration -> Dimsome. Then manage lights and schedules from the Dimsome sidebar panel. YAML import is still supported for development/migration, but it is no longer the primary setup path.
+
+## Behavior Contract
+
+Dimsome is intended to behave as a deterministic two-ramp controller:
+
+- Dimming starts at civil dusk unless a fixed dim time is configured.
+- Brightening starts at civil dawn unless a fixed brighten time is configured.
+- A fixed dim time completely ignores civil dusk for dimming.
+- A fixed brighten time completely ignores civil dawn for brightening.
+- During a dim ramp, lights move from max/day target to min/night target.
+- During a brighten ramp, lights move from min/night target to max/day target.
+- After the dusk ramp ends and before the next dawn/brighten ramp starts, lights that turn on are set to the low/night target.
+- After the dawn/brighten ramp ends and before the next dusk/dim ramp starts, lights that turn on are set to the high/day target.
+- If a light is manually touched during a ramp, Dimsome stands down for that light until the next ramp window.
+
+Civil dawn/dusk uses the `sun.sun` elevation crossing of `-6.0` degrees, plus Home Assistant's `next_dawn` and `next_dusk` attributes to avoid missed-event or restart timing failures.
 
 ## GUI
 
@@ -81,6 +97,5 @@ dimsome:
 
 - Brightness config is percent-based (`1` to `100`) and converted to Home Assistant's `1` to `255` brightness scale internally.
 - Color support intentionally starts with `color_temp_kelvin` only. Other color modes need explicit support instead of ambiguous "color" handling.
-- Civil dawn/dusk is detected live from `sun.sun` elevation crossing `-6.0`. This avoids astral/location helpers, but precision depends on Home Assistant's `sun.sun` update cadence.
-- Civil schedules cannot reconstruct a civil ramp that already started before a Home Assistant restart unless Dimsome has observed the relevant `sun.sun` elevation crossing since startup. Fixed-time schedules do reconstruct from wall-clock time.
+- Civil dawn/dusk is based on `sun.sun` elevation crossing `-6.0`, refreshed periodically and reconstructed from `sun.sun` next-event attributes.
 - Manual overrides are treated as any external state change during a ramp. Home Assistant does not reliably distinguish a human from an automation, so automations should call `dimsome.resume` when they want to hand control back.
