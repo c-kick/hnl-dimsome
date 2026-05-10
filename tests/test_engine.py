@@ -14,6 +14,7 @@ from custom_components.dimsome.engine import (
     civil_event_time,
     high_plateau_target,
     is_low_plateau,
+    low_plateau_target,
     next_window_start,
     reconstructed_civil_samples,
     should_clear_manual_override_for_window,
@@ -175,6 +176,62 @@ def test_high_plateau_after_brightening_uses_max_brightness_and_color() -> None:
 
     assert target_for_now(fixed_config(), now, []) == high_plateau_target(
         fixed_config()
+    )
+
+
+def test_fixed_brighten_time_overrides_civil_dawn() -> None:
+    """A configured brighten time completely ignores civil dawn."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.FIXED_TIME, at="06:30:00"
+            ),
+        }
+    )
+    samples = [
+        SunElevationSample(datetime(2026, 5, 4, 21, 0, tzinfo=TZ), -5.0),
+        SunElevationSample(datetime(2026, 5, 4, 21, 10, tzinfo=TZ), -7.0),
+        SunElevationSample(datetime(2026, 5, 5, 5, 0, tzinfo=TZ), -7.0),
+        SunElevationSample(datetime(2026, 5, 5, 5, 10, tzinfo=TZ), -5.0),
+        SunElevationSample(datetime(2026, 5, 5, 21, 0, tzinfo=TZ), -5.0),
+        SunElevationSample(datetime(2026, 5, 5, 21, 10, tzinfo=TZ), -7.0),
+    ]
+
+    assert target_for_now(config, datetime(2026, 5, 5, 6, 0, tzinfo=TZ), samples) == (
+        low_plateau_target(config)
+    )
+    assert target_for_now(config, datetime(2026, 5, 5, 7, 0, tzinfo=TZ), samples) == (
+        LightTarget(45, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 3100))
+    )
+
+
+def test_fixed_dim_time_overrides_civil_dusk() -> None:
+    """A configured dim time completely ignores civil dusk."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(ScheduleType.FIXED_TIME, at="20:00:00"),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN
+            ),
+        }
+    )
+    samples = [
+        SunElevationSample(datetime(2026, 5, 5, 5, 0, tzinfo=TZ), -7.0),
+        SunElevationSample(datetime(2026, 5, 5, 5, 10, tzinfo=TZ), -5.0),
+        SunElevationSample(datetime(2026, 5, 5, 22, 0, tzinfo=TZ), -5.0),
+        SunElevationSample(datetime(2026, 5, 5, 22, 10, tzinfo=TZ), -7.0),
+    ]
+
+    assert target_for_now(config, datetime(2026, 5, 5, 20, 30, tzinfo=TZ), samples) == (
+        LightTarget(45, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 3100))
+    )
+    assert target_for_now(config, datetime(2026, 5, 5, 21, 30, tzinfo=TZ), samples) == (
+        low_plateau_target(config)
     )
 
 

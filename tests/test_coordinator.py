@@ -67,6 +67,53 @@ def test_resume_service_handler_accepts_single_service_call(monkeypatch) -> None
     assert calls == [(hass, call)]
 
 
+def test_start_registers_periodic_refresh_for_civil_schedules(monkeypatch) -> None:
+    """Civil schedules must refresh sun data even when no ramp timer is active."""
+    config = ResolvedLightConfig(
+        entity_id="light.test",
+        enabled=True,
+        min_brightness_pct=30,
+        max_brightness_pct=80,
+        min_color=None,
+        max_color=None,
+        dim_schedule=ScheduleConfig(ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK),
+        brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:30:00"),
+        ramp_duration=timedelta(hours=1),
+        override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+        override_grace_period=None,
+        split_turn_on_calls=False,
+        apply_on_recovered_on=True,
+    )
+    controller = coordinator.DimsomeController(
+        SimpleNamespace(
+            states=SimpleNamespace(get=lambda _: None),
+            bus=SimpleNamespace(async_listen=lambda *_: lambda: None),
+        ),
+        "entry",
+        [config],
+    )
+    intervals = []
+
+    monkeypatch.setattr(
+        coordinator,
+        "async_track_state_change_event",
+        lambda *_: lambda: None,
+    )
+    monkeypatch.setattr(
+        coordinator,
+        "async_track_time_interval",
+        lambda *args: intervals.append(args) or (lambda: None),
+    )
+    monkeypatch.setattr(controller, "async_tick", lambda *_: None)
+
+    asyncio.run(controller.async_start())
+
+    assert intervals == [
+        (controller.hass, controller.async_tick, coordinator.SUN_REFRESH_INTERVAL)
+    ]
+    assert controller._sun_refresh_unsub is not None
+
+
 def test_user_context_is_manual_override() -> None:
     """Frontend/API changes with a user id should stand down Dimsome."""
     context = SimpleNamespace(id="change", parent_id=None, user_id="user")

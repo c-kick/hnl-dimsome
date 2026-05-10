@@ -56,6 +56,7 @@ from .models import (
 _LOGGER = logging.getLogger(__name__)
 
 RAMP_INTERVAL = timedelta(seconds=15)
+SUN_REFRESH_INTERVAL = timedelta(minutes=5)
 IGNORE_UPDATE_WINDOW = timedelta(seconds=10)
 SUN_ENTITY_ID = "sun.sun"
 SUN_ATTR_NEXT_DAWN = "next_dawn"
@@ -85,6 +86,7 @@ class DimsomeController:
         self._unsubs: list[Any] = []
         self._ramp_unsub: Any | None = None
         self._wake_unsub: Any | None = None
+        self._sun_refresh_unsub: Any | None = None
         self._sun_samples: list[SunElevationSample] = []
         self._automation_context_ids: list[str] = []
 
@@ -115,6 +117,9 @@ class DimsomeController:
                     self.hass, [SUN_ENTITY_ID], self._async_sun_changed
                 )
             )
+            self._sun_refresh_unsub = async_track_time_interval(
+                self.hass, self.async_tick, SUN_REFRESH_INTERVAL
+            )
             self._record_sun_sample(self.hass.states.get(SUN_ENTITY_ID))
 
         await self.async_tick()
@@ -127,6 +132,9 @@ class DimsomeController:
         if self._wake_unsub is not None:
             self._wake_unsub()
             self._wake_unsub = None
+        if self._sun_refresh_unsub is not None:
+            self._sun_refresh_unsub()
+            self._sun_refresh_unsub = None
         for runtime in self.lights.values():
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
