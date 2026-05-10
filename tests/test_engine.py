@@ -25,6 +25,7 @@ from custom_components.dimsome.engine import (
     target_for_now,
     target_for_window,
     target_matches_state,
+    upcoming_civil_samples,
 )
 from custom_components.dimsome.models import (
     ColorMode,
@@ -244,6 +245,90 @@ def test_reconstructed_civil_dusk_produces_low_plateau_target() -> None:
     assert target.brightness_pct == 10
 
 
+def test_reconstructed_civil_dusk_matches_live_after_midnight_case() -> None:
+    """After midnight, next_dusk still identifies the previous evening plateau."""
+    now = datetime(2026, 5, 10, 1, 54, 20, tzinfo=TZ)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "min_brightness_pct": 30,
+            "max_brightness_pct": 80,
+            "min_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+            "max_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2450),
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.FIXED_TIME, at="06:30:00"
+            ),
+        }
+    )
+
+    target = target_for_now(
+        config,
+        now,
+        reconstructed_civil_samples(
+            elevation=-20.25,
+            next_dawn="2026-05-10T03:11:41.391141+00:00",
+            next_dusk="2026-05-10T20:01:11.496936+00:00",
+        ),
+    )
+
+    assert target == LightTarget(
+        brightness_pct=30,
+        color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+    )
+
+
+def test_live_schedule_transitions_through_dawn_and_next_dusk() -> None:
+    """Live civil-dusk/fixed-dawn schedule stays coherent through the next cycle."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "min_brightness_pct": 30,
+            "max_brightness_pct": 80,
+            "min_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+            "max_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2450),
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.FIXED_TIME, at="06:30:00"
+            ),
+        }
+    )
+    samples = [
+        *reconstructed_civil_samples(
+            elevation=-20.25,
+            next_dawn="2026-05-10T03:11:41.391141+00:00",
+            next_dusk="2026-05-10T20:01:11.496936+00:00",
+        ),
+        *upcoming_civil_samples(
+            next_dawn="2026-05-10T03:11:41.391141+00:00",
+            next_dusk="2026-05-10T20:01:11.496936+00:00",
+        ),
+    ]
+
+    assert target_for_now(
+        config, datetime(2026, 5, 10, 6, 15, tzinfo=TZ), samples
+    ) == LightTarget(30, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300))
+    assert target_for_now(
+        config, datetime(2026, 5, 10, 7, 0, tzinfo=TZ), samples
+    ) == LightTarget(55, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2375))
+    assert target_for_now(
+        config, datetime(2026, 5, 10, 12, 0, tzinfo=TZ), samples
+    ) == LightTarget(80, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2450))
+    assert next_window_start(
+        config, datetime(2026, 5, 10, 12, 0, tzinfo=TZ), samples
+    ) == datetime(2026, 5, 10, 20, 1, 11, 496936, tzinfo=ZoneInfo("UTC"))
+    assert target_for_now(
+        config, datetime(2026, 5, 10, 22, 31, 11, 496936, tzinfo=TZ), samples
+    ) == LightTarget(55, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2375))
+    assert target_for_now(
+        config, datetime(2026, 5, 10, 23, 30, tzinfo=TZ), samples
+    ) == LightTarget(30, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300))
+
+
 def test_civil_schedule_handles_out_of_order_reconstructed_samples() -> None:
     """Synthetic dusk samples may be appended after later sun updates."""
     next_dusk = datetime(2026, 5, 8, 19, 57, tzinfo=ZoneInfo("UTC"))
@@ -272,6 +357,49 @@ def test_civil_schedule_handles_out_of_order_reconstructed_samples() -> None:
 
     assert target is not None
     assert target.brightness_pct == 10
+
+
+def test_upcoming_civil_dusk_produces_next_ramp_start() -> None:
+    """The runtime can schedule civil dusk before the elevation crossing happens."""
+    next_dusk = datetime(2026, 5, 9, 20, 1, tzinfo=ZoneInfo("UTC"))
+    now = datetime(2026, 5, 9, 21, 55, tzinfo=TZ)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+        }
+    )
+
+    assert next_window_start(
+        config,
+        now,
+        upcoming_civil_samples(next_dawn=None, next_dusk=next_dusk.isoformat()),
+    ) == next_dusk
+
+
+def test_upcoming_civil_dusk_produces_active_ramp_target() -> None:
+    """A one-shot wake at civil dusk can start ramping without a sun event."""
+    next_dusk = datetime(2026, 5, 9, 20, 1, tzinfo=ZoneInfo("UTC"))
+    now = datetime(2026, 5, 9, 22, 31, tzinfo=TZ)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+        }
+    )
+
+    target = target_for_now(
+        config,
+        now,
+        upcoming_civil_samples(next_dawn=None, next_dusk=next_dusk.isoformat()),
+    )
+
+    assert target is not None
+    assert target.brightness_pct == 45
 
 
 def test_target_matching_uses_tolerance() -> None:

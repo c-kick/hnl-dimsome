@@ -39,6 +39,7 @@ from .engine import (
     split_turn_on_service_data,
     target_matches_state,
     target_for_now,
+    upcoming_civil_samples,
 )
 from .models import (
     ColorMode,
@@ -506,10 +507,12 @@ class DimsomeController:
         if elevation is None:
             return
         self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
+        self._sun_samples.extend(_upcoming_civil_samples(state))
         self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))
         cutoff = dt_util.now() - timedelta(days=2)
+        bounded = (sample for sample in self._sun_samples if sample.at >= cutoff)
         self._sun_samples = sorted(
-            (sample for sample in self._sun_samples if sample.at >= cutoff),
+            {sample.at: sample for sample in bounded}.values(),
             key=lambda sample: sample.at,
         )
 
@@ -600,6 +603,16 @@ def _reconstructed_civil_samples(
         return []
     return reconstructed_civil_samples(
         elevation=elevation,
+        next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
+        next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
+    )
+
+
+def _upcoming_civil_samples(state: State | None) -> list[SunElevationSample]:
+    """Reconstruct upcoming civil crossings exposed by sun.sun."""
+    if state is None:
+        return []
+    return upcoming_civil_samples(
         next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
         next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
     )

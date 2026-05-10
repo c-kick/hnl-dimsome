@@ -125,6 +125,30 @@ def reconstructed_civil_samples(
     ]
 
 
+def upcoming_civil_samples(
+    *, next_dawn: object, next_dusk: object
+) -> list[SunElevationSample]:
+    """Reconstruct upcoming civil crossings from sun.sun's next event attributes."""
+    samples: list[SunElevationSample] = []
+    for value, before_elevation in (
+        (next_dawn, CIVIL_ELEVATION - 1),
+        (next_dusk, CIVIL_ELEVATION + 1),
+    ):
+        if not isinstance(value, str):
+            continue
+        try:
+            next_event = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        samples.extend(
+            [
+                SunElevationSample(next_event - timedelta(seconds=1), before_elevation),
+                SunElevationSample(next_event, CIVIL_ELEVATION),
+            ]
+        )
+    return samples
+
+
 def schedule_start(
     schedule: ScheduleConfig,
     day: datetime,

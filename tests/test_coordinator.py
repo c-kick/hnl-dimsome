@@ -208,6 +208,57 @@ def test_tick_refreshes_civil_sun_samples_from_current_sun_state(monkeypatch) ->
     ]
 
 
+def test_tick_schedules_wake_from_upcoming_civil_dusk(monkeypatch) -> None:
+    """Civil dusk must not depend only on catching a sun.sun crossing event."""
+    now = datetime(2026, 5, 9, 21, 55, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    next_dusk = datetime(2026, 5, 9, 20, 1, tzinfo=ZoneInfo("UTC"))
+    config = ResolvedLightConfig(
+        entity_id="light.test",
+        enabled=True,
+        min_brightness_pct=30,
+        max_brightness_pct=80,
+        min_color=None,
+        max_color=None,
+        dim_schedule=ScheduleConfig(ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK),
+        brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:30:00"),
+        ramp_duration=timedelta(hours=1),
+        override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+        override_grace_period=None,
+        split_turn_on_calls=False,
+        apply_on_recovered_on=True,
+    )
+    runtime = LightRuntime(config=config)
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._sun_samples = []
+    controller._ramp_unsub = None
+    controller._wake_unsub = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                state="above_horizon",
+                attributes={
+                    "elevation": -5.4,
+                    "next_dawn": "2026-05-10T03:11:00+00:00",
+                    "next_dusk": next_dusk.isoformat(),
+                },
+            )
+            if entity_id == coordinator.SUN_ENTITY_ID
+            else SimpleNamespace(state="on", attributes={})
+        )
+    )
+    wake_calls = []
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+    monkeypatch.setattr(
+        controller, "_schedule_wake_timer", lambda *args: wake_calls.append(args)
+    )
+
+    asyncio.run(controller.async_tick())
+
+    assert wake_calls == [(now, next_dusk)]
+
+
 def test_tick_records_last_decision_for_diagnostics(monkeypatch) -> None:
     """Runtime diagnostics must explain why a light did or did not dim."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=ZoneInfo("Europe/Amsterdam"))
