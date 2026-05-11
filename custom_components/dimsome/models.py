@@ -22,6 +22,7 @@ from .const import (
     CONF_OVERRIDE_RESUME_MODE,
     CONF_APPLY_ON_RECOVERED_ON,
     CONF_RAMP_DURATION,
+    CONF_SETTLE_DELAY,
     CONF_SPLIT_TURN_ON_CALLS,
 )
 
@@ -94,6 +95,7 @@ class ResolvedLightConfig:
     override_grace_period: timedelta | None
     split_turn_on_calls: bool
     apply_on_recovered_on: bool
+    settle_delay: timedelta = timedelta(milliseconds=500)
 
 
 @dataclass(frozen=True)
@@ -141,7 +143,9 @@ def parse_duration(value: Any, default: timedelta | None = None) -> timedelta | 
     if isinstance(value, str):
         parts = value.split(":")
         if len(parts) == 3:
-            hours, minutes, seconds = (int(part) for part in parts)
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
             return timedelta(hours=hours, minutes=minutes, seconds=seconds)
         if len(parts) == 2:
             hours, minutes = (int(part) for part in parts)
@@ -216,6 +220,11 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
             timedelta(minutes=60),
         )
         assert ramp_duration is not None
+        settle_delay = parse_duration(
+            light.get(CONF_SETTLE_DELAY),
+            timedelta(milliseconds=500),
+        )
+        assert settle_delay is not None
 
         grace_period = parse_duration(
             light.get(
@@ -265,6 +274,7 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                         global_config.get(CONF_APPLY_ON_RECOVERED_ON, True),
                     )
                 ),
+                settle_delay=settle_delay,
             )
         )
     return resolved

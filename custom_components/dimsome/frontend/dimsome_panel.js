@@ -57,6 +57,15 @@ const minutesToDuration = (value) => {
   return `${String(hours).padStart(2, "0")}:${String(remainder).padStart(2, "0")}:00`;
 };
 
+const durationToSeconds = (value, fallback = 0.5) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "number") return value;
+  const parts = String(value).split(":").map((part) => Number(part));
+  if (parts.length === 3) return Math.max(0, parts[0] * 3600 + parts[1] * 60 + parts[2]);
+  if (parts.length === 2) return Math.max(0, parts[0] * 3600 + parts[1] * 60);
+  return Math.max(0, Number(value) || fallback);
+};
+
 const getPath = (object, path) => path.split(".").reduce((value, key) => value?.[key], object);
 
 const setPath = (object, path, value) => {
@@ -189,6 +198,7 @@ class DimsomePanel extends HTMLElement {
     if (control.dataset.path) {
       let value = this._controlValue(control, event);
       if (control.dataset.number === "int") value = Number(value);
+      if (control.dataset.number === "float") value = Number(value);
       if (control.dataset.duration === "minutes") value = minutesToDuration(value);
       setPath(this._config, control.dataset.path, value);
       this._normalizeScheduleForPath(control.dataset.path);
@@ -558,6 +568,20 @@ class DimsomePanel extends HTMLElement {
                 ${(light.apply_on_recovered_on ?? true) ? "checked" : ""}
                 data-path="lights.${index}.apply_on_recovered_on"
               ></ha-switch>
+            `)}
+            ${this._renderSetting("Settle Delay", "Wait after this light turns on before applying the current target.", `
+              <ha-textfield
+                label="Seconds"
+                type="number"
+                min="0"
+                max="30"
+                step="0.1"
+                inputmode="decimal"
+                suffix="s"
+                data-value="${durationToSeconds(light.settle_delay)}"
+                data-path="lights.${index}.settle_delay"
+                data-number="float"
+              ></ha-textfield>
             `)}
             ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
               <ha-switch

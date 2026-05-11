@@ -198,6 +198,45 @@ def test_turn_on_verification_reapplies_mismatched_target(monkeypatch) -> None:
     assert calls == [(runtime, target, None)]
 
 
+def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None:
+    """Turn-on handling should wait for device on transitions before targeting."""
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    runtime = LightRuntime(
+        config=SimpleNamespace(entity_id="light.test", settle_delay=timedelta(seconds=2))
+    )
+    controller._sun_samples = []
+    calls = []
+
+    async def fake_sleep(delay: float) -> None:
+        calls.append(("sleep", delay))
+
+    async def fake_apply(call_runtime: LightRuntime, call_target: LightTarget) -> None:
+        calls.append(("apply", call_runtime, call_target))
+
+    async def fake_verify(call_runtime: LightRuntime, call_target: LightTarget) -> None:
+        calls.append(("verify", call_runtime, call_target))
+
+    target = LightTarget(50)
+
+    def fake_target_for_now(*_: Any) -> LightTarget:
+        calls.append(("target",))
+        return target
+
+    monkeypatch.setattr(coordinator.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(coordinator, "target_for_now", fake_target_for_now)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+    monkeypatch.setattr(controller, "_async_verify_turn_on_target", fake_verify)
+
+    asyncio.run(controller._async_handle_turn_on(runtime))
+
+    assert calls == [
+        ("sleep", 2.0),
+        ("target",),
+        ("apply", runtime, target),
+        ("verify", runtime, target),
+    ]
+
+
 def test_tick_refreshes_civil_sun_samples_from_current_sun_state(monkeypatch) -> None:
     """A missed sun listener update must not leave civil dusk stuck on high."""
     now = datetime(2026, 5, 7, 23, 19, tzinfo=ZoneInfo("Europe/Amsterdam"))

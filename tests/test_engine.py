@@ -89,6 +89,99 @@ def test_resolves_global_defaults_and_per_light_overrides() -> None:
     assert configs[0].brighten_schedule.event is SunEvent.CIVIL_DAWN
 
 
+def test_resolves_turn_on_settle_delay_default_and_per_light_override() -> None:
+    """Settle delay defaults to 500 ms unless overridden per light."""
+    configs = resolve_light_configs(
+        {
+            "global": {
+                "dim_schedule": {"type": "fixed_time", "at": "21:00"},
+                "brighten_schedule": {"type": "fixed_time", "at": "06:00"},
+            },
+            "lights": [
+                {
+                    "entity_id": "light.default",
+                    "min_brightness_pct": 10,
+                    "max_brightness_pct": 80,
+                },
+                {
+                    "entity_id": "light.override",
+                    "min_brightness_pct": 10,
+                    "max_brightness_pct": 80,
+                    "settle_delay": 0.25,
+                },
+            ],
+        }
+    )
+
+    assert configs[0].settle_delay == timedelta(milliseconds=500)
+    assert configs[1].settle_delay == timedelta(milliseconds=250)
+
+
+def test_turn_on_settle_delay_defaults_to_500ms() -> None:
+    """New configs default to a short settle delay for device on transitions."""
+    configs = resolve_light_configs(
+        {
+            "global": {
+                "dim_schedule": {"type": "fixed_time", "at": "21:00"},
+                "brighten_schedule": {"type": "fixed_time", "at": "06:00"},
+            },
+            "lights": [
+                {
+                    "entity_id": "light.test",
+                    "min_brightness_pct": 10,
+                    "max_brightness_pct": 80,
+                },
+            ],
+        }
+    )
+
+    assert configs[0].settle_delay == timedelta(milliseconds=500)
+
+
+def test_settle_delay_accepts_fractional_duration_strings() -> None:
+    """Sub-second settle delays should also work in duration string config."""
+    configs = resolve_light_configs(
+        {
+            "global": {
+                "dim_schedule": {"type": "fixed_time", "at": "21:00"},
+                "brighten_schedule": {"type": "fixed_time", "at": "06:00"},
+            },
+            "lights": [
+                {
+                    "entity_id": "light.test",
+                    "min_brightness_pct": 10,
+                    "max_brightness_pct": 80,
+                    "settle_delay": "00:00:00.5",
+                },
+            ],
+        }
+    )
+
+    assert configs[0].settle_delay == timedelta(milliseconds=500)
+
+
+def test_global_settle_delay_is_ignored() -> None:
+    """Settle delay is light-specific; global config cannot override the default."""
+    configs = resolve_light_configs(
+        {
+            "global": {
+                "dim_schedule": {"type": "fixed_time", "at": "21:00"},
+                "brighten_schedule": {"type": "fixed_time", "at": "06:00"},
+                "settle_delay": 3,
+            },
+            "lights": [
+                {
+                    "entity_id": "light.test",
+                    "min_brightness_pct": 10,
+                    "max_brightness_pct": 80,
+                },
+            ],
+        }
+    )
+
+    assert configs[0].settle_delay == timedelta(milliseconds=500)
+
+
 def test_light_enabled_defaults_to_true_and_can_be_disabled() -> None:
     """Per-light enabled state defaults on and can persist off."""
     configs = resolve_light_configs(

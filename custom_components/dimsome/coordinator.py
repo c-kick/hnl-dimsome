@@ -410,6 +410,8 @@ class DimsomeController:
 
     async def _async_handle_turn_on(self, runtime: LightRuntime) -> None:
         """Apply the current expected value when a light turns on."""
+        if runtime.config.settle_delay > timedelta(0):
+            await asyncio.sleep(runtime.config.settle_delay.total_seconds())
         now = dt_util.now()
         target = target_for_now(runtime.config, now, self._sun_samples)
         if target is not None:
