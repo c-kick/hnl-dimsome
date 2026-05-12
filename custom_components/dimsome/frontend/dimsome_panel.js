@@ -33,6 +33,13 @@ const MDI_REFRESH = "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 
 const MDI_CONTENT_SAVE = "M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z";
 const MDI_PLAY_CIRCLE = "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5V7.5L16,12L10,16.5Z";
 const MDI_DELETE = "M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z";
+const MDI_PLUS = "M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z";
+
+const ADD_DRAFT_DEFAULT = Object.freeze({
+  entity_id: "",
+  min_brightness_pct: 10,
+  max_brightness_pct: 80,
+});
 
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
@@ -78,9 +85,20 @@ const setPath = (object, path, value) => {
   current[parts.at(-1)] = value;
 };
 
-const optionHtml = (options, current) => options.map(([value, label]) => (
-  `<ha-list-item value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</ha-list-item>`
-)).join("");
+const selectHtml = ({ path, value, options, renderOnChange }) => {
+  const opts = options.map(([v, l]) => (
+    `<option value="${escapeHtml(v)}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`
+  )).join("");
+  return `
+    <span class="native-select-wrap">
+      <select
+        class="native-select"
+        data-path="${escapeHtml(path)}"
+        ${renderOnChange ? 'data-render-on-change="true"' : ""}
+      >${opts}</select>
+    </span>
+  `;
+};
 
 const percentBrightness = (value) => {
   if (!value) return "";
@@ -91,12 +109,19 @@ const formatEntityName = (state, entityId) => (
   state?.attributes?.friendly_name || entityId || "New Light"
 );
 
+const clampPct = (value, fallback) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(100, Math.max(1, Math.round(number)));
+};
+
 class DimsomePanel extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._hass = null;
     this._panel = null;
+    this._narrow = false;
     this._loaded = false;
     this._saving = false;
     this._configured = false;
@@ -104,6 +129,10 @@ class DimsomePanel extends HTMLElement {
     this._lightStates = {};
     this._error = "";
     this._message = "";
+    this._addDialogOpen = false;
+    this._addDraft = { ...ADD_DRAFT_DEFAULT };
+    this._addError = "";
+    this._pendingScrollToTop = false;
   }
 
   set hass(hass) {
@@ -111,6 +140,8 @@ class DimsomePanel extends HTMLElement {
     this._hass = hass;
     if (!this._loaded) this._loadConfig();
     if (!hadHass && this.shadowRoot?.hasChildNodes()) this._hydrateNativeComponents();
+    const menuBtn = this.shadowRoot?.querySelector("ha-menu-button");
+    if (menuBtn) menuBtn.hass = hass;
   }
 
   get hass() {
@@ -119,6 +150,25 @@ class DimsomePanel extends HTMLElement {
 
   set panel(panel) {
     this._panel = panel;
+  }
+
+  set narrow(value) {
+    const narrow = Boolean(value);
+    if (narrow === this._narrow) return;
+    this._narrow = narrow;
+    const menuBtn = this.shadowRoot?.querySelector("ha-menu-button");
+    if (menuBtn) menuBtn.narrow = narrow;
+    this.shadowRoot?.querySelectorAll("ha-settings-row").forEach((row) => {
+      row.narrow = narrow;
+    });
+  }
+
+  get narrow() {
+    return this._narrow;
+  }
+
+  set route(value) {
+    this._route = value;
   }
 
   connectedCallback() {
@@ -188,13 +238,22 @@ class DimsomePanel extends HTMLElement {
     const index = Number(button.dataset.index);
     if (action === "save") this._saveConfig();
     if (action === "reload") this._loadConfig();
-    if (action === "add-light") this._addLight();
+    if (action === "open-add-dialog") this._openAddDialog();
+    if (action === "cancel-add") this._closeAddDialog();
+    if (action === "confirm-add") this._confirmAdd();
     if (action === "remove-light") this._removeLight(index);
     if (action === "resume") this._resume(button.dataset.entityId || null);
   }
 
   _handleControlInput(control, event) {
     if (!control?.dataset) return;
+    if (control.dataset.draftPath) {
+      let value = this._controlValue(control, event);
+      if (control.dataset.number === "int") value = Number(value);
+      this._addDraft[control.dataset.draftPath] = value;
+      this._addError = "";
+      return;
+    }
     if (control.dataset.path) {
       let value = this._controlValue(control, event);
       if (control.dataset.number === "int") value = Number(value);
@@ -240,12 +299,7 @@ class DimsomePanel extends HTMLElement {
 
   _controlValue(input, event) {
     if (input.localName === "ha-switch" || input.type === "checkbox") return input.checked;
-    if (input.localName === "ha-select" && event.type === "selected") {
-      const item = input.items?.[event.detail?.index];
-      if (item?.value !== undefined) return item.value;
-    }
-    if (event.detail?.item?.value !== undefined) return event.detail.item.value;
-    if (event.detail?.value !== undefined) return event.detail.value || "";
+    if (event.detail?.value !== undefined) return event.detail.value ?? "";
     return input.value ?? "";
   }
 
@@ -262,15 +316,46 @@ class DimsomePanel extends HTMLElement {
     }
   }
 
-  _addLight() {
-    this._config.lights.push({
-      entity_id: "",
+  _openAddDialog() {
+    this._addDraft = { ...ADD_DRAFT_DEFAULT };
+    this._addError = "";
+    this._addDialogOpen = true;
+    this._render();
+  }
+
+  _closeAddDialog() {
+    if (!this._addDialogOpen) return;
+    this._addDialogOpen = false;
+    this._addError = "";
+    this._render();
+  }
+
+  _confirmAdd() {
+    const entityId = (this._addDraft.entity_id || "").trim();
+    if (!entityId) {
+      this._addError = "Pick a light entity to continue.";
+      this._render();
+      return;
+    }
+    if (this._config.lights.some((l) => l.entity_id === entityId)) {
+      this._addError = `${entityId} is already configured.`;
+      this._render();
+      return;
+    }
+    const min = clampPct(this._addDraft.min_brightness_pct, 10);
+    const max = clampPct(this._addDraft.max_brightness_pct, 80);
+    const newLight = {
+      entity_id: entityId,
       enabled: true,
-      min_brightness_pct: 10,
-      max_brightness_pct: 80,
+      min_brightness_pct: min,
+      max_brightness_pct: Math.max(min, max),
       split_turn_on_calls: this._config.global.split_turn_on_calls || false,
       apply_on_recovered_on: this._config.global.apply_on_recovered_on ?? true,
-    });
+    };
+    this._config.lights.unshift(newLight);
+    this._addDialogOpen = false;
+    this._addError = "";
+    this._pendingScrollToTop = true;
     this._render();
   }
 
@@ -285,6 +370,18 @@ class DimsomePanel extends HTMLElement {
   _hydrateNativeComponents() {
     if (!this.shadowRoot) return;
 
+    // Menu button — native sidebar toggle for narrow screens
+    const menuBtn = this.shadowRoot.querySelector("ha-menu-button");
+    if (menuBtn) {
+      menuBtn.hass = this._hass;
+      menuBtn.narrow = this._narrow;
+    }
+
+    // ha-settings-row uses the panel's narrow prop to stack heading/control.
+    this.shadowRoot.querySelectorAll("ha-settings-row").forEach((row) => {
+      row.narrow = this._narrow;
+    });
+
     // Icon button SVG paths
     this.shadowRoot.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
       const action = btn.dataset.action;
@@ -292,6 +389,7 @@ class DimsomePanel extends HTMLElement {
       if (action === "resume") btn.path = MDI_PLAY_CIRCLE;
       if (action === "save") btn.path = MDI_CONTENT_SAVE;
       if (action === "remove-light") btn.path = MDI_DELETE;
+      if (action === "open-add-dialog") btn.path = MDI_PLUS;
     });
 
     // Entity pickers
@@ -314,17 +412,8 @@ class DimsomePanel extends HTMLElement {
       selector.value = selector.dataset.value || "";
     });
 
-    // Selects
-    this.shadowRoot.querySelectorAll("ha-select[data-value]").forEach((select) => {
-      select.fixedMenuPosition = true;
-      select.naturalMenuWidth = true;
-      select.value = select.dataset.value;
-      select.options = [...select.querySelectorAll("ha-list-item")].map((item) => ({
-        value: item.getAttribute("value") || "",
-        label: item.textContent.trim(),
-      }));
-      select.requestUpdate?.("options");
-    });
+    // Native <select> elements drive themselves via the `selected` option
+    // attribute, so they need no hydration.
 
     // Text fields
     this.shadowRoot.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
@@ -336,21 +425,36 @@ class DimsomePanel extends HTMLElement {
       control.checked = control.hasAttribute("checked");
     });
 
+    // Dialog lifecycle — handles ESC / scrim / programmatic close.
+    const dialog = this.shadowRoot.querySelector("ha-dialog");
+    if (dialog && !dialog._dimsomeBound) {
+      dialog._dimsomeBound = true;
+      dialog.addEventListener("closed", () => {
+        if (this._addDialogOpen) this._closeAddDialog();
+      });
+    }
+
     // Bind all data controls
     this.shadowRoot
-      .querySelectorAll("[data-path], [data-color-toggle], [data-override-toggle]")
+      .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle]")
       .forEach((control) => this._bindControl(control));
+
+    // After prepending a new light, smooth-scroll it into view.
+    if (this._pendingScrollToTop) {
+      this._pendingScrollToTop = false;
+      requestAnimationFrame(() => {
+        const first = this.shadowRoot.querySelector(".lights-list > ha-card");
+        if (first?.scrollIntoView) {
+          first.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+      });
+    }
   }
 
   _bindControl(control) {
     const handler = (event) => this._handleControlInput(control, event);
     if (control.localName === "ha-switch") {
       control.addEventListener("change", handler);
-      return;
-    }
-    if (control.localName === "ha-select") {
-      control.addEventListener("selected", handler);
-      control.addEventListener("closed", (event) => event.stopPropagation());
       return;
     }
     if (control.localName === "ha-entity-picker" || control.localName === "ha-selector") {
@@ -379,13 +483,12 @@ class DimsomePanel extends HTMLElement {
       <div class="schedule-card" aria-labelledby="${id}-title">
         <div class="schedule-title" id="${id}-title">${escapeHtml(title)}</div>
         <div class="field-grid compact">
-          ${this._renderField("Schedule", `
-            <ha-select
-              data-path="${path}.type"
-              data-render-on-change="true"
-              data-value="${escapeHtml(type)}"
-            >${optionHtml(SCHEDULE_TYPES, type)}</ha-select>
-          `)}
+          ${this._renderField("Schedule", selectHtml({
+            path: `${path}.type`,
+            value: type,
+            options: SCHEDULE_TYPES,
+            renderOnChange: true,
+          }))}
           ${type === "fixed_time" ? `
             ${this._renderField("Time", `
               <ha-selector
@@ -395,12 +498,11 @@ class DimsomePanel extends HTMLElement {
               ></ha-selector>
             `)}
           ` : `
-            ${this._renderField("Sun Event", `
-              <ha-select
-                data-path="${path}.event"
-                data-value="${escapeHtml(schedule.event || "civil_dusk")}"
-              >${optionHtml(SUN_EVENTS, schedule.event || "civil_dusk")}</ha-select>
-            `)}
+            ${this._renderField("Sun Event", selectHtml({
+              path: `${path}.event`,
+              value: schedule.event || "civil_dusk",
+              options: SUN_EVENTS,
+            }))}
           `}
         </div>
       </div>
@@ -418,21 +520,18 @@ class DimsomePanel extends HTMLElement {
 
   _renderSetting(title, description, controlHtml) {
     return `
-      <div class="settings-row">
-        <div class="settings-label">
-          <div class="settings-heading">${escapeHtml(title)}</div>
-          <div class="settings-description">${escapeHtml(description)}</div>
-        </div>
-        <div class="settings-control">${controlHtml}</div>
-      </div>
+      <ha-settings-row>
+        <span slot="heading">${escapeHtml(title)}</span>
+        <span slot="description">${escapeHtml(description)}</span>
+        ${controlHtml}
+      </ha-settings-row>
     `;
   }
 
   _renderGlobal() {
     const global = this._config.global;
     return `
-      <ha-card>
-        <div class="card-header">Global Defaults</div>
+      <ha-card header="Global Defaults">
         <div class="card-content">
           <div class="two-col">
             ${this._renderSchedule("Dimming", "global.dim_schedule", DEFAULT_CONFIG.global.dim_schedule)}
@@ -452,13 +551,11 @@ class DimsomePanel extends HTMLElement {
                 data-duration="minutes"
               ></ha-textfield>
             `)}
-            ${this._renderSetting("Override Resume", "Choose how manual changes return to Dimsome control.", `
-              <ha-select
-                label="Mode"
-                data-path="global.override_resume_mode"
-                data-value="${escapeHtml(global.override_resume_mode || "manual_only")}"
-              >${optionHtml(RESUME_MODES, global.override_resume_mode || "manual_only")}</ha-select>
-            `)}
+            ${this._renderSetting("Override Resume", "Choose how manual changes return to Dimsome control.", selectHtml({
+              path: "global.override_resume_mode",
+              value: global.override_resume_mode || "manual_only",
+              options: RESUME_MODES,
+            }))}
             ${this._renderSetting("Grace Period", "Delay before automatic resume after a manual change.", `
               <ha-textfield
                 label="Minutes"
@@ -648,11 +745,11 @@ class DimsomePanel extends HTMLElement {
                   data-path="lights.${index}.ramp_duration"
                   data-duration="minutes"
                 ></ha-textfield>
-                <ha-select
-                  label="Override Resume"
-                  data-path="lights.${index}.override_resume_mode"
-                  data-value="${escapeHtml(light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}"
-                >${optionHtml(RESUME_MODES, light.override_resume_mode || this._config.global.override_resume_mode || "manual_only")}</ha-select>
+                ${this._renderField("Override Resume", selectHtml({
+                  path: `lights.${index}.override_resume_mode`,
+                  value: light.override_resume_mode || this._config.global.override_resume_mode || "manual_only",
+                  options: RESUME_MODES,
+                }))}
                 <ha-textfield
                   label="Grace Period"
                   type="number"
@@ -672,15 +769,94 @@ class DimsomePanel extends HTMLElement {
     `;
   }
 
+  _renderToolbar(actions = true) {
+    return `
+      <div class="panel-toolbar">
+        <ha-menu-button></ha-menu-button>
+        <div class="panel-title">Dimsome</div>
+        ${actions ? `
+          <div class="panel-actions">
+            <ha-icon-button
+              label="Reload config"
+              title="Reload"
+              data-action="reload"
+            ></ha-icon-button>
+            <ha-icon-button
+              label="Resume all lights"
+              title="Resume All"
+              data-action="resume"
+            ></ha-icon-button>
+            <ha-icon-button
+              label="Save configuration"
+              title="Save"
+              data-action="save"
+              ${this._saving ? "disabled" : ""}
+            ></ha-icon-button>
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  _renderAddDialog() {
+    if (!this._addDialogOpen) return "";
+    return `
+      <ha-dialog
+        open
+        hideActions
+        heading="Add Light"
+        scrimClickAction="cancel"
+        escapeKeyAction="cancel"
+      >
+        <div class="dialog-form">
+          ${this._addError ? `<ha-alert alert-type="error">${escapeHtml(this._addError)}</ha-alert>` : ""}
+          <ha-entity-picker
+            allow-custom-entity
+            label="Light Entity"
+            data-value="${escapeHtml(this._addDraft.entity_id || "")}"
+            data-draft-path="entity_id"
+            autofocus
+          ></ha-entity-picker>
+          <div class="dialog-row">
+            <ha-textfield
+              label="Min Brightness"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              suffix="%"
+              data-value="${this._addDraft.min_brightness_pct ?? 10}"
+              data-draft-path="min_brightness_pct"
+              data-number="int"
+            ></ha-textfield>
+            <ha-textfield
+              label="Max Brightness"
+              type="number"
+              min="1"
+              max="100"
+              inputmode="numeric"
+              suffix="%"
+              data-value="${this._addDraft.max_brightness_pct ?? 80}"
+              data-draft-path="max_brightness_pct"
+              data-number="int"
+            ></ha-textfield>
+          </div>
+          <div class="dialog-actions">
+            <ha-button data-action="cancel-add">Cancel</ha-button>
+            <ha-button raised data-action="confirm-add">Add Light</ha-button>
+          </div>
+        </div>
+      </ha-dialog>
+    `;
+  }
+
   _render() {
     if (!this.shadowRoot) return;
 
     if (!this._loaded) {
       this.shadowRoot.innerHTML = `
         ${this._styles()}
-        <div class="panel-toolbar">
-          <div class="panel-title">Dimsome</div>
-        </div>
+        ${this._renderToolbar(false)}
         <div class="center-state-wrap">
           <div class="center-state">
             <ha-circular-progress active></ha-circular-progress>
@@ -695,9 +871,7 @@ class DimsomePanel extends HTMLElement {
     if (!this._configured) {
       this.shadowRoot.innerHTML = `
         ${this._styles()}
-        <div class="panel-toolbar">
-          <div class="panel-title">Dimsome</div>
-        </div>
+        ${this._renderToolbar(false)}
         <div class="center-state-wrap">
           <div class="center-state">
             <ha-icon icon="mdi:brightness-6" class="empty-icon"></ha-icon>
@@ -713,27 +887,7 @@ class DimsomePanel extends HTMLElement {
 
     this.shadowRoot.innerHTML = `
       ${this._styles()}
-      <div class="panel-toolbar">
-        <div class="panel-title">Dimsome</div>
-        <div class="panel-actions">
-          <ha-icon-button
-            label="Reload config"
-            title="Reload"
-            data-action="reload"
-          ></ha-icon-button>
-          <ha-icon-button
-            label="Resume all lights"
-            title="Resume All"
-            data-action="resume"
-          ></ha-icon-button>
-          <ha-icon-button
-            label="Save configuration"
-            title="Save"
-            data-action="save"
-            ${this._saving ? "disabled" : ""}
-          ></ha-icon-button>
-        </div>
-      </div>
+      ${this._renderToolbar(true)}
 
       <main class="page-body">
         <div class="announcements" aria-live="polite">
@@ -749,7 +903,10 @@ class DimsomePanel extends HTMLElement {
           <h2>Lights</h2>
           <div class="section-head-actions">
             <span class="lights-count">${this._config.lights.length} configured</span>
-            <ha-button outlined data-action="add-light">Add Light</ha-button>
+            <ha-button raised data-action="open-add-dialog">
+              <ha-svg-icon slot="icon" path="${MDI_PLUS}"></ha-svg-icon>
+              Add Light
+            </ha-button>
           </div>
         </div>
 
@@ -760,12 +917,14 @@ class DimsomePanel extends HTMLElement {
                 <ha-icon icon="mdi:lightbulb-outline" class="empty-icon"></ha-icon>
                 <h2>No Lights Yet</h2>
                 <p>Add a light to start adaptive dimming.</p>
-                <ha-button data-action="add-light">Add Light</ha-button>
+                <ha-button raised data-action="open-add-dialog">Add Light</ha-button>
               </div>
             </ha-card>
           `}
         </section>
       </main>
+
+      ${this._renderAddDialog()}
     `;
     this._hydrateNativeComponents();
   }
@@ -790,6 +949,12 @@ class DimsomePanel extends HTMLElement {
           position: sticky;
           top: 0;
           z-index: 4;
+        }
+
+        ha-menu-button {
+          --mdc-icon-button-size: 40px;
+          --mdc-icon-size: 24px;
+          margin-inline-start: 4px;
         }
 
         .panel-title {
@@ -823,28 +988,71 @@ class DimsomePanel extends HTMLElement {
           margin: 0;
         }
 
-        /* ── Card structure ──────────────────────────────────────────── */
-
-        /* Replicate ha-card's internal .card-header styling */
-        .card-header {
-          color: var(--ha-card-header-color, var(--primary-text-color));
-          font-size: var(--ha-card-header-font-size, 1.5rem);
-          font-weight: var(--ha-card-header-font-weight, 500);
-          letter-spacing: -0.012em;
-          line-height: 1.2;
-          padding: 20px 16px 12px;
-        }
-
         ha-card,
         ha-alert {
           display: block;
         }
 
         ha-textfield,
-        ha-select,
         ha-selector,
         ha-entity-picker {
           width: 100%;
+        }
+
+        /* Native <select> styled to match HA's outlined inputs. HA's frontend
+           doesn't reliably expose a self-contained dropdown component to
+           custom panels, so we use a real <select> wrapped for a theme-aware
+           dropdown chevron. */
+        .native-select-wrap {
+          display: block;
+          position: relative;
+          width: 100%;
+        }
+
+        .native-select-wrap::after {
+          border-right: 2px solid var(--secondary-text-color);
+          border-bottom: 2px solid var(--secondary-text-color);
+          content: "";
+          height: 8px;
+          pointer-events: none;
+          position: absolute;
+          right: 14px;
+          top: 50%;
+          transform: translateY(-70%) rotate(45deg);
+          width: 8px;
+        }
+
+        .native-select {
+          appearance: none;
+          -webkit-appearance: none;
+          background-color: var(--card-background-color, var(--primary-background-color));
+          border: 1px solid var(--divider-color);
+          border-radius: 4px;
+          box-sizing: border-box;
+          color: var(--primary-text-color);
+          cursor: pointer;
+          font: inherit;
+          font-size: 1rem;
+          line-height: 1.2;
+          min-height: 40px;
+          padding: 0 32px 0 12px;
+          transition: border-color 120ms ease, box-shadow 120ms ease;
+          width: 100%;
+        }
+
+        .native-select:hover {
+          border-color: var(--secondary-text-color);
+        }
+
+        .native-select:focus {
+          border-color: var(--primary-color);
+          box-shadow: 0 0 0 1px var(--primary-color);
+          outline: none;
+        }
+
+        .native-select:disabled {
+          color: var(--disabled-text-color);
+          cursor: not-allowed;
         }
 
         ha-button,
@@ -858,46 +1066,20 @@ class DimsomePanel extends HTMLElement {
         }
 
         /* ── Settings rows ───────────────────────────────────────────── */
-
+        /* ha-settings-row owns its internal grid; we only manage rhythm
+           and the divider between consecutive rows. */
         .settings-list {
           margin-top: 8px;
         }
 
-        .settings-row {
-          align-items: center;
+        ha-settings-row {
+          --paper-item-body-two-line-min-height: 0;
           border-top: 1px solid var(--divider-color);
-          display: grid;
-          gap: 16px;
-          grid-template-columns: minmax(0, 1fr) minmax(220px, 240px);
-          min-height: 64px;
-          padding: 12px 0;
+          padding: 4px 0;
         }
 
-        .settings-row:first-child {
+        ha-settings-row:first-child {
           border-top: none;
-        }
-
-        .settings-label {
-          min-width: 0;
-        }
-
-        .settings-heading {
-          font-weight: 500;
-          line-height: 1.4;
-        }
-
-        .settings-description {
-          color: var(--secondary-text-color);
-          font-size: 0.875rem;
-          line-height: 1.4;
-          margin-top: 2px;
-        }
-
-        .settings-control {
-          align-items: center;
-          display: flex;
-          justify-content: flex-end;
-          min-width: 0;
         }
 
         /* ── Layout ──────────────────────────────────────────────────── */
@@ -1082,6 +1264,32 @@ class DimsomePanel extends HTMLElement {
           --mdc-icon-size: 40px;
         }
 
+        /* ── Add Light dialog ────────────────────────────────────────── */
+        ha-dialog {
+          --mdc-dialog-min-width: min(420px, calc(100vw - 32px));
+          --mdc-dialog-max-width: 560px;
+          --dialog-content-padding: 0;
+        }
+
+        .dialog-form {
+          display: grid;
+          gap: 16px;
+          padding: 8px 24px 8px;
+        }
+
+        .dialog-row {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .dialog-actions {
+          display: flex;
+          gap: 8px;
+          justify-content: flex-end;
+          margin-top: 8px;
+        }
+
         a {
           color: var(--primary-color);
           text-decoration: none;
@@ -1112,13 +1320,8 @@ class DimsomePanel extends HTMLElement {
             flex-wrap: wrap;
           }
 
-          .settings-row {
+          .dialog-row {
             grid-template-columns: 1fr;
-            min-height: auto;
-          }
-
-          .settings-control {
-            justify-content: flex-start;
           }
         }
       </style>
