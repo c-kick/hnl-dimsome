@@ -395,6 +395,83 @@ def test_reconstructed_civil_dusk_produces_low_plateau_target() -> None:
     assert target.brightness_pct == 10
 
 
+def test_civil_night_without_next_dusk_stays_on_low_plateau() -> None:
+    """Current civil-night evidence must not fall back to the day target."""
+    now = datetime(2026, 5, 15, 0, 46, tzinfo=TZ)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "min_brightness_pct": 30,
+            "max_brightness_pct": 80,
+            "min_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+            "max_color": ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2450),
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.FIXED_TIME, at="06:30:00"
+            ),
+        }
+    )
+
+    target = target_for_now(
+        config,
+        now,
+        reconstructed_civil_samples(
+            elevation=-14.0,
+            next_dawn="2026-05-15T03:02:21.933133+00:00",
+            next_dusk=None,
+        ),
+    )
+
+    assert target == LightTarget(
+        brightness_pct=30,
+        color=ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2300),
+    )
+
+
+def test_current_elevation_below_civil_threshold_means_low_for_civil_schedules() -> None:
+    """Civil night is enough evidence for the night plateau after restart."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN
+            ),
+        }
+    )
+
+    assert target_for_now(
+        config,
+        datetime(2026, 5, 15, 0, 46, tzinfo=TZ),
+        [SunElevationSample(datetime(2026, 5, 15, 0, 46, tzinfo=TZ), -14.0)],
+    ) == low_plateau_target(config)
+
+
+def test_current_elevation_above_civil_threshold_means_high_for_civil_schedules() -> None:
+    """Civil day is enough evidence for the day plateau after restart."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN
+            ),
+        }
+    )
+
+    assert target_for_now(
+        config,
+        datetime(2026, 5, 15, 12, 0, tzinfo=TZ),
+        [SunElevationSample(datetime(2026, 5, 15, 12, 0, tzinfo=TZ), 52.0)],
+    ) == high_plateau_target(config)
+
+
 def test_reconstructed_civil_dusk_matches_live_after_midnight_case() -> None:
     """After midnight, next_dusk still identifies the previous evening plateau."""
     now = datetime(2026, 5, 10, 1, 54, 20, tzinfo=TZ)

@@ -112,15 +112,32 @@ def reconstructed_civil_samples(
     is_after_dusk = elevation < CIVIL_ELEVATION
     value = next_dusk if is_after_dusk else next_dawn
     if not isinstance(value, str):
-        return []
+        return _fallback_civil_night_samples(is_after_dusk, next_dawn)
     try:
         next_event = datetime.fromisoformat(value)
     except ValueError:
-        return []
+        return _fallback_civil_night_samples(is_after_dusk, next_dawn)
     previous_event = next_event - timedelta(days=1)
     before_elevation = CIVIL_ELEVATION + 1 if is_after_dusk else CIVIL_ELEVATION - 1
     return [
         SunElevationSample(previous_event - timedelta(seconds=1), before_elevation),
+        SunElevationSample(previous_event, CIVIL_ELEVATION),
+    ]
+
+
+def _fallback_civil_night_samples(
+    is_after_dusk: bool, next_dawn: object
+) -> list[SunElevationSample]:
+    """Infer a previous dusk marker when current elevation proves civil night."""
+    if not is_after_dusk or not isinstance(next_dawn, str):
+        return []
+    try:
+        next_event = datetime.fromisoformat(next_dawn)
+    except ValueError:
+        return []
+    previous_event = next_event - timedelta(hours=8)
+    return [
+        SunElevationSample(previous_event - timedelta(seconds=1), CIVIL_ELEVATION + 1),
         SunElevationSample(previous_event, CIVIL_ELEVATION),
     ]
 
@@ -219,12 +236,40 @@ def next_window_start(
     return min(starts, default=None)
 
 
+def latest_sun_elevation(
+    now: datetime, sun_samples: list[SunElevationSample]
+) -> float | None:
+    """Return the latest known sun elevation at or before now."""
+    previous_samples = [sample for sample in sun_samples if sample.at <= now]
+    if not previous_samples:
+        return None
+    latest = max(previous_samples, key=lambda sample: sample.at)
+    return latest.elevation
+
+
+def is_civil_night(now: datetime, sun_samples: list[SunElevationSample]) -> bool:
+    """Return whether the latest sun elevation is below civil twilight."""
+    elevation = latest_sun_elevation(now, sun_samples)
+    return elevation is not None and elevation < CIVIL_ELEVATION
+
+
+def is_civil_day(now: datetime, sun_samples: list[SunElevationSample]) -> bool:
+    """Return whether the latest sun elevation is at or above civil twilight."""
+    elevation = latest_sun_elevation(now, sun_samples)
+    return elevation is not None and elevation >= CIVIL_ELEVATION
+
+
 def is_low_plateau(
     config: ResolvedLightConfig,
     now: datetime,
     sun_samples: list[SunElevationSample],
 ) -> bool:
     """Return whether now is after dimming and before brightening."""
+    if (
+        config.dim_schedule.type is ScheduleType.CIVIL_SUN
+        and is_civil_night(now, sun_samples)
+    ):
+        return True
     previous_windows = [
         window for window in candidate_windows(config, now, sun_samples) if window.end <= now
     ]
@@ -239,6 +284,11 @@ def is_high_plateau(
     sun_samples: list[SunElevationSample],
 ) -> bool:
     """Return whether now is after brightening and before dimming."""
+    if (
+        config.brighten_schedule.type is ScheduleType.CIVIL_SUN
+        and is_civil_day(now, sun_samples)
+    ):
+        return True
     previous_windows = [
         window for window in candidate_windows(config, now, sun_samples) if window.end <= now
     ]
