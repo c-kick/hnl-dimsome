@@ -41,6 +41,14 @@ const ADD_DRAFT_DEFAULT = Object.freeze({
   max_brightness_pct: 80,
 });
 
+const STATUS_LABEL = {
+  ramping: "Ramping",
+  tracking: "Tracking",
+  manual_override: "Manual override",
+  stood_down: "Standing down",
+  disabled: "Disabled",
+};
+
 const clone = (value) => JSON.parse(JSON.stringify(value));
 
 const escapeHtml = (value) => String(value ?? "")
@@ -115,6 +123,61 @@ const clampPct = (value, fallback) => {
   return Math.min(100, Math.max(1, Math.round(number)));
 };
 
+const formatTime = (date) =>
+  `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+const formatRelative = (target, now) => {
+  let secs = Math.round((target - now) / 1000);
+  if (secs < 0) secs = 0;
+  if (secs < 60) return "in <1 min";
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `in ${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `in ${h}h ${m}m` : `in ${h}h`;
+};
+
+// ── Solar elevation (NOAA approximate) ─────────────────────────────────
+// Returns degrees above horizon for given lat/lon at JS Date.
+const solarElevation = (lat, lon, date) => {
+  const rad = Math.PI / 180;
+  const startOfYear = new Date(date.getFullYear(), 0, 0);
+  const n = Math.floor((date - startOfYear) / 86400000);
+  const decl = 23.45 * rad * Math.sin(2 * Math.PI * (284 + n) / 365);
+  const B = 2 * Math.PI * (n - 81) / 365;
+  const eot = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
+  const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes() + date.getUTCSeconds() / 60;
+  const solarMinutes = utcMinutes + 4 * lon + eot;
+  const hourAngle = (solarMinutes / 60 - 12) * 15 * rad;
+  const latRad = lat * rad;
+  const sinE = Math.sin(latRad) * Math.sin(decl) +
+               Math.cos(latRad) * Math.cos(decl) * Math.cos(hourAngle);
+  return Math.asin(Math.max(-1, Math.min(1, sinE))) / rad;
+};
+
+// First time in [start, end] where sun elevation crosses `threshold` in given direction.
+const findElevationCrossing = (lat, lon, start, end, threshold, direction) => {
+  const stepMs = 60 * 1000;
+  let prev = solarElevation(lat, lon, start);
+  for (let t = start.getTime() + stepMs; t <= end.getTime(); t += stepMs) {
+    const cur = solarElevation(lat, lon, new Date(t));
+    const descending = prev > threshold && cur <= threshold;
+    const ascending = prev < threshold && cur >= threshold;
+    if ((direction === "descending" && descending) || (direction === "ascending" && ascending)) {
+      return new Date(t);
+    }
+    prev = cur;
+  }
+  return null;
+};
+
+const timeOfDayToday = (timeStr, baseDate) => {
+  const parts = String(timeStr || "00:00").split(":").map(Number);
+  const d = new Date(baseDate);
+  d.setHours(parts[0] || 0, parts[1] || 0, parts[2] || 0, 0);
+  return d;
+};
+
 class DimsomePanel extends HTMLElement {
   constructor() {
     super();
@@ -127,12 +190,14 @@ class DimsomePanel extends HTMLElement {
     this._configured = false;
     this._config = clone(DEFAULT_CONFIG);
     this._lightStates = {};
+    this._runtime = {};
     this._error = "";
     this._message = "";
     this._addDialogOpen = false;
     this._addDraft = { ...ADD_DRAFT_DEFAULT };
     this._addError = "";
     this._pendingScrollToTop = false;
+    this._tickHandle = null;
   }
 
   set hass(hass) {
@@ -174,6 +239,14 @@ class DimsomePanel extends HTMLElement {
   connectedCallback() {
     this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
     this._render();
+    this._tickHandle = window.setInterval(() => this._refreshLiveBits(), 60_000);
+  }
+
+  disconnectedCallback() {
+    if (this._tickHandle) {
+      window.clearInterval(this._tickHandle);
+      this._tickHandle = null;
+    }
   }
 
   async _loadConfig() {
@@ -184,6 +257,7 @@ class DimsomePanel extends HTMLElement {
       this._configured = result.configured;
       this._config = this._normalizeConfig(result.config || DEFAULT_CONFIG);
       this._lightStates = result.light_states || {};
+      this._runtime = result.runtime || {};
       this._error = "";
     } catch (error) {
       this._error = error.message || String(error);
@@ -223,11 +297,27 @@ class DimsomePanel extends HTMLElement {
       await this._hass.callService("dimsome", "resume", data);
       this._error = "";
       this._message = entityId ? `Resumed ${entityId}.` : "Resumed all Dimsome lights.";
+      this._loaded = false;
+      await this._loadConfig();
+      return;
     } catch (error) {
       this._error = error.message || String(error);
       this._message = "";
     }
     this._render();
+  }
+
+  _refreshLiveBits() {
+    if (!this._loaded || !this._configured) return;
+    const hero = this.shadowRoot?.querySelector(".hero-card");
+    if (!hero) return;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = this._renderHero();
+    const fresh = wrapper.firstElementChild;
+    if (fresh) {
+      hero.replaceWith(fresh);
+      this._hydrateNativeComponents();
+    }
   }
 
   _handleClick(event) {
@@ -475,6 +565,186 @@ class DimsomePanel extends HTMLElement {
     return parts.join(" · ");
   }
 
+  _renderStatusChip(entityId) {
+    const rt = this._runtime?.[entityId];
+    const status = rt?.status || "tracking";
+    const label = STATUS_LABEL[status] || status;
+    return `<span class="status-chip status-${escapeHtml(status)}">
+      <span class="chip-dot"></span>${escapeHtml(label)}
+    </span>`;
+  }
+
+  // Compute today's dim/brighten windows from global schedule + ramp duration.
+  _scheduleWindows(now) {
+    const lat = this._hass?.config?.latitude ?? 52.0;
+    const lon = this._hass?.config?.longitude ?? 5.0;
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    const dimSched = this._config.global.dim_schedule || {};
+    const briSched = this._config.global.brighten_schedule || {};
+    const rampMin = durationToMinutes(this._config.global.ramp_duration || "01:00:00", 60);
+
+    const dimStart = dimSched.type === "fixed_time"
+      ? timeOfDayToday(dimSched.at, now)
+      : findElevationCrossing(lat, lon, start, end, -6, "descending");
+    const briStart = briSched.type === "fixed_time"
+      ? timeOfDayToday(briSched.at, now)
+      : findElevationCrossing(lat, lon, start, end, -6, "ascending");
+
+    return {
+      lat, lon, start, end, rampMin,
+      dimStart,
+      dimEnd: dimStart ? new Date(dimStart.getTime() + rampMin * 60_000) : null,
+      briStart,
+      briEnd: briStart ? new Date(briStart.getTime() + rampMin * 60_000) : null,
+    };
+  }
+
+  _renderSunCurve(now, windows) {
+    const W = 1000;
+    const H = 220;
+    const padX = 32;
+    const padTop = 16;
+    const padBottom = 36;
+    const innerW = W - padX * 2;
+    const innerH = H - padTop - padBottom;
+    const { lat, lon, start, end } = windows;
+
+    const samples = [];
+    let maxElev = 30;
+    let minElev = -30;
+    for (let t = start.getTime(); t <= end.getTime(); t += 5 * 60 * 1000) {
+      const e = solarElevation(lat, lon, new Date(t));
+      samples.push({ t, e });
+      if (e > maxElev) maxElev = e;
+      if (e < minElev) minElev = e;
+    }
+    const range = Math.max(Math.abs(maxElev), Math.abs(minElev)) + 10;
+    const elevToY = (e) => padTop + (1 - (e + range) / (2 * range)) * innerH;
+    const tToX = (t) => padX + ((t - start.getTime()) / (end.getTime() - start.getTime())) * innerW;
+    const horizonY = elevToY(0);
+    const twilightY = elevToY(-6);
+
+    const path = samples
+      .map((s, i) => `${i === 0 ? "M" : "L"}${tToX(s.t).toFixed(1)} ${elevToY(s.e).toFixed(1)}`)
+      .join(" ");
+    const dayPath = `M${padX} ${horizonY} ` +
+      samples.map((s) => `L${tToX(s.t).toFixed(1)} ${elevToY(Math.max(s.e, 0)).toFixed(1)}`).join(" ") +
+      ` L${padX + innerW} ${horizonY} Z`;
+
+    const rampRect = (a, b, cls) => {
+      if (!a || !b) return "";
+      const x1 = Math.max(padX, tToX(a.getTime()));
+      const x2 = Math.min(padX + innerW, tToX(b.getTime()));
+      if (x2 <= x1) return "";
+      return `<rect class="${cls}" x="${x1.toFixed(1)}" y="${padTop}" width="${(x2 - x1).toFixed(1)}" height="${innerH}"/>`;
+    };
+
+    const nowX = tToX(now.getTime());
+
+    const hourTicks = [0, 6, 12, 18, 24].map((h) => {
+      const t = new Date(start);
+      t.setHours(h);
+      const x = tToX(t.getTime());
+      return `
+        <line class="grid" x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${padTop + innerH}"/>
+        <text class="tick" x="${x.toFixed(1)}" y="${H - 12}" text-anchor="middle">${String(h).padStart(2, "0")}:00</text>
+      `;
+    }).join("");
+
+    const eventMarker = (date, label, cls) => {
+      if (!date) return "";
+      const x = tToX(date.getTime());
+      return `
+        <line class="event-line ${cls}" x1="${x.toFixed(1)}" y1="${padTop}" x2="${x.toFixed(1)}" y2="${padTop + innerH}"/>
+        <text class="event-label ${cls}" x="${x.toFixed(1)}" y="${padTop - 4}" text-anchor="middle">${escapeHtml(label)}</text>
+      `;
+    };
+
+    return `
+      <svg class="sun-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Sun elevation and Dimsome schedule for today">
+        <defs>
+          <linearGradient id="day-fill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--warning-color, #ffb300)" stop-opacity="0.45"/>
+            <stop offset="100%" stop-color="var(--warning-color, #ffb300)" stop-opacity="0.05"/>
+          </linearGradient>
+        </defs>
+
+        ${rampRect(windows.dimStart, windows.dimEnd, "ramp-dim")}
+        ${rampRect(windows.briStart, windows.briEnd, "ramp-bri")}
+
+        ${hourTicks}
+
+        <line class="horizon" x1="${padX}" y1="${horizonY}" x2="${padX + innerW}" y2="${horizonY}"/>
+        <line class="twilight" x1="${padX}" y1="${twilightY}" x2="${padX + innerW}" y2="${twilightY}"/>
+        <text class="axis-label" x="${padX + innerW - 4}" y="${twilightY - 4}" text-anchor="end">civil twilight −6°</text>
+        <text class="axis-label" x="${padX + innerW - 4}" y="${horizonY - 4}" text-anchor="end">horizon</text>
+
+        <path d="${dayPath}" fill="url(#day-fill)"/>
+        <path class="sun-path" d="${path}" fill="none"/>
+
+        ${eventMarker(windows.dimStart, `dim ${formatTime(windows.dimStart || now)}`, "ev-dim")}
+        ${eventMarker(windows.briStart, `bright ${formatTime(windows.briStart || now)}`, "ev-bri")}
+
+        <line class="now-line" x1="${nowX.toFixed(1)}" y1="${padTop}" x2="${nowX.toFixed(1)}" y2="${padTop + innerH}"/>
+        <circle class="now-dot" cx="${nowX.toFixed(1)}" cy="${elevToY(solarElevation(lat, lon, now)).toFixed(1)}" r="5"/>
+      </svg>
+    `;
+  }
+
+  _renderHero() {
+    const now = new Date();
+    const windows = this._scheduleWindows(now);
+    const statuses = Object.values(this._runtime || {});
+    const ramping = statuses.find((s) => s?.status === "ramping");
+
+    let headline;
+    if (ramping) {
+      const seq = ramping?.active_window?.sequence;
+      headline = seq === "brighten" ? "Brightening" : "Dimming";
+    } else {
+      const elev = solarElevation(windows.lat, windows.lon, now);
+      headline = elev >= -6 ? "Tracking day" : "Tracking night";
+    }
+
+    const upcoming = [];
+    if (windows.dimStart && windows.dimStart > now) upcoming.push({ kind: "dim", at: windows.dimStart });
+    if (windows.briStart && windows.briStart > now) upcoming.push({ kind: "brighten", at: windows.briStart });
+    upcoming.sort((a, b) => a.at - b.at);
+    const next = upcoming[0];
+    const subParts = [];
+    const totalLights = this._config.lights.length;
+    if (totalLights) subParts.push(`${totalLights} light${totalLights === 1 ? "" : "s"}`);
+    if (next) subParts.push(`next ${next.kind} at ${formatTime(next.at)} (${formatRelative(next.at, now)})`);
+
+    return `
+      <ha-card class="hero-card">
+        <div class="hero-content">
+          <div class="hero-headline-row">
+            <div class="hero-text">
+              <div class="hero-eyebrow">Dimsome</div>
+              <h1 class="hero-headline">${escapeHtml(headline)}</h1>
+              <div class="hero-sub">${escapeHtml(subParts.join(" · "))}</div>
+            </div>
+            <ha-button data-action="resume" title="Resume all lights">
+              <ha-svg-icon slot="icon" path="${MDI_PLAY_CIRCLE}"></ha-svg-icon>
+              Resume all
+            </ha-button>
+          </div>
+          ${this._renderSunCurve(now, windows)}
+          <div class="legend">
+            <span><span class="legend-swatch swatch-dim"></span>Dim ramp</span>
+            <span><span class="legend-swatch swatch-bri"></span>Brighten ramp</span>
+            <span><span class="legend-swatch swatch-now"></span>Now ${formatTime(now)}</span>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
   _renderSchedule(title, path, fallback) {
     const schedule = getPath(this._config, path) || fallback;
     const type = schedule.type || "fixed_time";
@@ -531,7 +801,12 @@ class DimsomePanel extends HTMLElement {
   _renderGlobal() {
     const global = this._config.global;
     return `
-      <ha-card header="Global Defaults">
+      <ha-card>
+        <ha-expansion-panel
+          outlined
+          header="Schedule &amp; defaults"
+          secondary="Dim and brighten timing, plus fall-backs for every light"
+        >
         <div class="card-content">
           <div class="two-col">
             ${this._renderSchedule("Dimming", "global.dim_schedule", DEFAULT_CONFIG.global.dim_schedule)}
@@ -585,6 +860,7 @@ class DimsomePanel extends HTMLElement {
             `)}
           </div>
         </div>
+        </ha-expansion-panel>
       </ha-card>
     `;
   }
@@ -595,7 +871,7 @@ class DimsomePanel extends HTMLElement {
     const hasOverrides = Boolean(light.dim_schedule || light.brighten_schedule || light.ramp_duration || light.override_resume_mode);
     const entityName = formatEntityName(state, light.entity_id);
     return `
-      <ha-card>
+      <ha-card class="light-card" data-entity-id="${escapeHtml(light.entity_id)}">
         <div class="card-content">
           <div class="light-header-row">
             <div class="entity-title">
@@ -610,6 +886,13 @@ class DimsomePanel extends HTMLElement {
               </div>
             </div>
             <div class="light-actions">
+              ${this._renderStatusChip(light.entity_id)}
+              <ha-icon-button
+                label="Resume this light"
+                title="Resume"
+                data-action="resume"
+                data-entity-id="${escapeHtml(light.entity_id)}"
+              ></ha-icon-button>
               <ha-icon-button
                 label="Remove light"
                 class="remove-btn"
@@ -651,7 +934,20 @@ class DimsomePanel extends HTMLElement {
               ></ha-textfield>
             `)}
           </div>
+          <ha-expansion-panel
+            outlined
+            class="light-advanced"
+            header="Color &amp; advanced"
+            secondary="Color temperature, settle delay, recovery, split calls"
+          >
           <div class="settings-list">
+            ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
+              <ha-switch
+                aria-label="Adjust Color Temperature"
+                ${hasColor ? "checked" : ""}
+                data-color-toggle="${index}"
+              ></ha-switch>
+            `)}
             ${this._renderSetting("Split Brightness & Color Calls", "Use separate service calls for this light.", `
               <ha-switch
                 aria-label="Split Brightness &amp; Color Calls"
@@ -679,13 +975,6 @@ class DimsomePanel extends HTMLElement {
                 data-path="lights.${index}.settle_delay"
                 data-number="float"
               ></ha-textfield>
-            `)}
-            ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
-              <ha-switch
-                aria-label="Adjust Color Temperature"
-                ${hasColor ? "checked" : ""}
-                data-color-toggle="${index}"
-              ></ha-switch>
             `)}
           </div>
           ${hasColor ? `
@@ -718,6 +1007,15 @@ class DimsomePanel extends HTMLElement {
               `)}
             </div>
           ` : ""}
+          </ha-expansion-panel>
+
+          <ha-expansion-panel
+            outlined
+            class="light-override"
+            header="Custom schedule"
+            secondary="Override the global timing for this light"
+            ${hasOverrides ? "expanded" : ""}
+          >
           <div class="settings-list">
             ${this._renderSetting("Override Global Timing", "Use a separate schedule and resume behavior for this light.", `
               <ha-switch
@@ -764,6 +1062,7 @@ class DimsomePanel extends HTMLElement {
               </div>
             </div>
           ` : ""}
+          </ha-expansion-panel>
         </div>
       </ha-card>
     `;
@@ -780,11 +1079,6 @@ class DimsomePanel extends HTMLElement {
               label="Reload config"
               title="Reload"
               data-action="reload"
-            ></ha-icon-button>
-            <ha-icon-button
-              label="Resume all lights"
-              title="Resume All"
-              data-action="resume"
             ></ha-icon-button>
             <ha-icon-button
               label="Save configuration"
@@ -895,9 +1189,7 @@ class DimsomePanel extends HTMLElement {
           ${this._message ? `<ha-alert alert-type="success">${escapeHtml(this._message)}</ha-alert>` : ""}
         </div>
 
-        <section class="panel-grid">
-          ${this._renderGlobal()}
-        </section>
+        ${this._renderHero()}
 
         <div class="section-head">
           <h2>Lights</h2>
@@ -921,6 +1213,13 @@ class DimsomePanel extends HTMLElement {
               </div>
             </ha-card>
           `}
+        </section>
+
+        <div class="section-head">
+          <h2>Configuration</h2>
+        </div>
+        <section>
+          ${this._renderGlobal()}
         </section>
       </main>
 
@@ -1300,8 +1599,161 @@ class DimsomePanel extends HTMLElement {
           outline-offset: 3px;
         }
 
+        /* ── Hero card ───────────────────────────────────────────────── */
+        .hero-card {
+          --ha-card-border-radius: 18px;
+          overflow: hidden;
+          margin-bottom: 8px;
+        }
+        .hero-content {
+          display: grid;
+          gap: 16px;
+          padding: 20px 24px 16px;
+        }
+        .hero-headline-row {
+          align-items: flex-start;
+          display: flex;
+          gap: 16px;
+          justify-content: space-between;
+        }
+        .hero-eyebrow {
+          color: var(--secondary-text-color);
+          font-size: 0.75rem;
+          font-weight: 600;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+        .hero-headline {
+          color: var(--primary-text-color);
+          font-size: 1.75rem;
+          font-weight: 500;
+          line-height: 1.2;
+          margin-top: 4px;
+        }
+        .hero-sub {
+          color: var(--secondary-text-color);
+          font-size: 0.95rem;
+          margin-top: 4px;
+        }
+        .sun-curve {
+          background: var(--secondary-background-color);
+          border-radius: 12px;
+          display: block;
+          height: auto;
+          width: 100%;
+        }
+        .sun-curve .grid { stroke: var(--divider-color); stroke-width: 1; opacity: 0.5; }
+        .sun-curve .tick { fill: var(--secondary-text-color); font-size: 11px; }
+        .sun-curve .horizon { stroke: var(--secondary-text-color); stroke-width: 1.2; opacity: 0.6; }
+        .sun-curve .twilight {
+          stroke: var(--secondary-text-color);
+          stroke-width: 1;
+          stroke-dasharray: 4 4;
+          opacity: 0.5;
+        }
+        .sun-curve .axis-label { fill: var(--secondary-text-color); font-size: 10px; opacity: 0.8; }
+        .sun-curve .sun-path { stroke: var(--warning-color, #ffb300); stroke-width: 2.5; }
+        .sun-curve .ramp-dim { fill: var(--info-color, #039be5); opacity: 0.18; }
+        .sun-curve .ramp-bri { fill: var(--success-color, #43a047); opacity: 0.18; }
+        .sun-curve .event-line.ev-dim {
+          stroke: var(--info-color, #039be5);
+          stroke-width: 1.5;
+          stroke-dasharray: 2 3;
+        }
+        .sun-curve .event-line.ev-bri {
+          stroke: var(--success-color, #43a047);
+          stroke-width: 1.5;
+          stroke-dasharray: 2 3;
+        }
+        .sun-curve .event-label { font-size: 11px; font-weight: 600; }
+        .sun-curve .event-label.ev-dim { fill: var(--info-color, #039be5); }
+        .sun-curve .event-label.ev-bri { fill: var(--success-color, #43a047); }
+        .sun-curve .now-line { stroke: var(--primary-color); stroke-width: 2; }
+        .sun-curve .now-dot {
+          fill: var(--primary-color);
+          stroke: var(--card-background-color);
+          stroke-width: 2;
+        }
+        .legend {
+          align-items: center;
+          color: var(--secondary-text-color);
+          display: flex;
+          flex-wrap: wrap;
+          font-size: 0.85rem;
+          gap: 6px 16px;
+        }
+        .legend-swatch {
+          border-radius: 3px;
+          display: inline-block;
+          height: 12px;
+          margin-right: 6px;
+          vertical-align: middle;
+          width: 18px;
+        }
+        .swatch-dim { background: var(--info-color, #039be5); opacity: 0.5; }
+        .swatch-bri { background: var(--success-color, #43a047); opacity: 0.5; }
+        .swatch-now {
+          background: var(--primary-color);
+          height: 12px;
+          width: 3px;
+          vertical-align: middle;
+          margin-right: 6px;
+          display: inline-block;
+        }
+
+        /* ── Status chip ─────────────────────────────────────────────── */
+        .status-chip {
+          align-items: center;
+          background: var(--secondary-background-color);
+          border-radius: 999px;
+          color: var(--secondary-text-color);
+          display: inline-flex;
+          font-size: 0.75rem;
+          font-weight: 500;
+          gap: 6px;
+          letter-spacing: 0.02em;
+          padding: 4px 10px;
+          white-space: nowrap;
+        }
+        .chip-dot {
+          background: currentColor;
+          border-radius: 50%;
+          display: inline-block;
+          height: 8px;
+          width: 8px;
+        }
+        .status-chip.status-ramping {
+          background: color-mix(in srgb, var(--info-color, #039be5) 18%, transparent);
+          color: var(--info-color, #039be5);
+        }
+        .status-chip.status-tracking {
+          background: color-mix(in srgb, var(--success-color, #43a047) 14%, transparent);
+          color: var(--success-color, #43a047);
+        }
+        .status-chip.status-manual_override {
+          background: color-mix(in srgb, var(--warning-color, #ffb300) 22%, transparent);
+          color: var(--warning-color, #ff8f00);
+        }
+        .status-chip.status-stood_down {
+          background: color-mix(in srgb, var(--secondary-text-color) 18%, transparent);
+        }
+        .status-chip.status-disabled {
+          background: color-mix(in srgb, var(--error-color, #d32f2f) 14%, transparent);
+          color: var(--error-color, #d32f2f);
+        }
+
+        ha-expansion-panel.light-advanced,
+        ha-expansion-panel.light-override {
+          margin-top: 16px;
+          --ha-card-border-radius: 10px;
+          display: block;
+        }
+
         /* ── Mobile ──────────────────────────────────────────────────── */
         @media (max-width: 720px) {
+          .hero-content { padding: 16px; }
+          .hero-headline { font-size: 1.4rem; }
+          .hero-headline-row { flex-wrap: wrap; }
           .light-header-row {
             display: grid;
           }
