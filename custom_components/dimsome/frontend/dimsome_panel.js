@@ -1192,6 +1192,13 @@ class DimsomePanel extends HTMLElement {
         ${this._renderHero()}
 
         <div class="section-head">
+          <h2>Configuration</h2>
+        </div>
+        <section>
+          ${this._renderGlobal()}
+        </section>
+
+        <div class="section-head">
           <h2>Lights</h2>
           <div class="section-head-actions">
             <span class="lights-count">${this._config.lights.length} configured</span>
@@ -1213,13 +1220,6 @@ class DimsomePanel extends HTMLElement {
               </div>
             </ha-card>
           `}
-        </section>
-
-        <div class="section-head">
-          <h2>Configuration</h2>
-        </div>
-        <section>
-          ${this._renderGlobal()}
         </section>
       </main>
 
