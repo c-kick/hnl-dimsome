@@ -395,6 +395,64 @@ def test_reconstructed_civil_dusk_produces_low_plateau_target() -> None:
     assert target.brightness_pct == 10
 
 
+def test_reconstructed_civil_dusk_does_not_start_after_current_civil_night() -> None:
+    """Tomorrow's next_dusk can drift later than today's just-crossed dusk."""
+    now = datetime(2026, 5, 18, 22, 5, tzinfo=TZ)
+    next_dusk = now + timedelta(days=1, minutes=1)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+            ),
+        }
+    )
+
+    samples = reconstructed_civil_samples(
+        elevation=-6.01,
+        next_dawn="2026-05-19T03:00:00+00:00",
+        next_dusk=next_dusk.isoformat(),
+        now=now,
+    )
+    window = active_window(config, now, samples)
+
+    assert window is not None
+    assert samples == [
+        SunElevationSample(now - timedelta(seconds=1), -5.0),
+        SunElevationSample(now, -6.0),
+    ]
+    assert target_for_now(config, now, samples) == high_plateau_target(config)
+
+
+def test_reconstructed_civil_dawn_does_not_start_after_current_civil_day() -> None:
+    """Tomorrow's next_dawn can drift later than today's just-crossed dawn."""
+    now = datetime(2026, 5, 18, 5, 5, tzinfo=TZ)
+    next_dawn = now + timedelta(days=1, minutes=1)
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "brighten_schedule": ScheduleConfig(
+                ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN
+            ),
+        }
+    )
+
+    samples = reconstructed_civil_samples(
+        elevation=-5.99,
+        next_dawn=next_dawn.isoformat(),
+        next_dusk="2026-05-18T21:00:00+00:00",
+        now=now,
+    )
+    window = active_window(config, now, samples)
+
+    assert window is not None
+    assert samples == [
+        SunElevationSample(now - timedelta(seconds=1), -7.0),
+        SunElevationSample(now, -6.0),
+    ]
+    assert target_for_now(config, now, samples) == low_plateau_target(config)
+
+
 def test_civil_night_without_next_dusk_stays_on_low_plateau() -> None:
     """Current civil-night evidence must not fall back to the day target."""
     now = datetime(2026, 5, 15, 0, 46, tzinfo=TZ)

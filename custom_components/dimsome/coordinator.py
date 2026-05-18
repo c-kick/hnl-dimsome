@@ -615,6 +615,7 @@ def _reconstructed_civil_samples(
         elevation=elevation,
         next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
         next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
+        now=dt_util.now(),
     )
 
 

@@ -106,7 +106,11 @@ def civil_event_time(
 
 
 def reconstructed_civil_samples(
-    *, elevation: float, next_dawn: object, next_dusk: object
+    *,
+    elevation: float,
+    next_dawn: object,
+    next_dusk: object,
+    now: datetime | None = None,
 ) -> list[SunElevationSample]:
     """Reconstruct the last civil crossing from sun.sun's next event attributes."""
     is_after_dusk = elevation < CIVIL_ELEVATION
@@ -118,6 +122,8 @@ def reconstructed_civil_samples(
     except ValueError:
         return _fallback_civil_night_samples(is_after_dusk, next_dawn)
     previous_event = next_event - timedelta(days=1)
+    if now is not None and previous_event > now:
+        previous_event = now
     before_elevation = CIVIL_ELEVATION + 1 if is_after_dusk else CIVIL_ELEVATION - 1
     return [
         SunElevationSample(previous_event - timedelta(seconds=1), before_elevation),
