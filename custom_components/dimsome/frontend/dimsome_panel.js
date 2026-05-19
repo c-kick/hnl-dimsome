@@ -1,7 +1,7 @@
 const DEFAULT_CONFIG = {
   global: {
     dim_schedule: { type: "civil_sun", event: "civil_dusk" },
-    brighten_schedule: { type: "fixed_time", at: "06:00:00" },
+    brighten_schedule: { type: "civil_sun", event: "civil_dawn" },
     ramp_duration: "01:00:00",
     override_resume_mode: "manual_only",
     override_grace_period: "00:15:00",

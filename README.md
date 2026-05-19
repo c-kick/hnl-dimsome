@@ -7,7 +7,7 @@ It controls configured lights with two daily ramps:
 - dim from the day target to the night target
 - brighten from the night target to the day target
 
-By default, Dimsome dims at civil dusk and brightens at a fixed 06:00 time. Each ramp can also be configured with a fixed time. Fixed times take precedence over the civil-sun schedule.
+By default, Dimsome dims at civil dusk and brightens at civil dawn. Each ramp can also be configured with a fixed time. Fixed times take precedence over the civil-sun schedule.
 
 ## Features
 
@@ -131,8 +131,8 @@ dimsome:
       type: civil_sun
       event: civil_dusk
     brighten_schedule:
-      type: fixed_time
-      at: "06:00:00"
+      type: civil_sun
+      event: civil_dawn
     ramp_duration: "01:00:00"
     override_resume_mode: manual_only
     override_grace_period: "00:15:00"

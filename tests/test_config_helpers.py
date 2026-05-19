@@ -2,7 +2,31 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 from custom_components.dimsome.config_helpers import config_with_light_enabled
+
+
+def test_default_config_uses_civil_sun_for_both_ramps() -> None:
+    """New Dimsome entries should default to civil dusk and civil dawn."""
+    config_flow = ast.parse(Path("custom_components/dimsome/config_flow.py").read_text())
+    default_config = next(
+        ast.literal_eval(node.value)
+        for node in config_flow.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "DEFAULT_CONFIG"
+    )
+
+    assert default_config["global"]["dim_schedule"] == {
+        "type": "civil_sun",
+        "event": "civil_dusk",
+    }
+    assert default_config["global"]["brighten_schedule"] == {
+        "type": "civil_sun",
+        "event": "civil_dawn",
+    }
 
 
 def test_switch_enabled_update_preserves_full_config() -> None:
