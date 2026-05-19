@@ -44,8 +44,9 @@ class DimsomeLightStatusSensor(SensorEntity):
         self._attr_name = f"{entity_id} Dimsome status"
         self._attr_unique_id = f"{entry_id}_{_entity_slug(entity_id)}_status"
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry_id)},
-            "name": "Dimsome",
+            "identifiers": {(DOMAIN, entry_id, entity_id)},
+            "name": entity_id,
+            "via_device": (DOMAIN, entry_id),
         }
 
     @property
