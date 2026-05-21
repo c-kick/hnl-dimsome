@@ -330,8 +330,10 @@ class DimsomeController:
 
         if (
             runtime.config.apply_on_recovered_on
-            and old_state is not None
-            and old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            and (
+                old_state is None
+                or old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
+            )
             and new_state.state == STATE_ON
         ):
             runtime.stood_down = False
@@ -521,10 +523,7 @@ class DimsomeController:
         self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))
         cutoff = dt_util.now() - timedelta(days=2)
         bounded = (sample for sample in self._sun_samples if sample.at >= cutoff)
-        self._sun_samples = sorted(
-            {sample.at: sample for sample in bounded}.values(),
-            key=lambda sample: sample.at,
-        )
+        self._sun_samples = _dedupe_sun_samples(bounded)
 
     def _record_decision(
         self, runtime: LightRuntime, decision: str, at: datetime
@@ -603,6 +602,18 @@ def _state_elevation(state: State | None) -> float | None:
         return float(elevation)
     except (TypeError, ValueError):
         return None
+
+
+def _dedupe_sun_samples(
+    samples: Collection[SunElevationSample],
+) -> list[SunElevationSample]:
+    """Deduplicate samples while preserving exact civil crossing markers."""
+    by_time: dict[datetime, SunElevationSample] = {}
+    for sample in samples:
+        existing = by_time.get(sample.at)
+        if existing is None or existing.elevation != CIVIL_ELEVATION:
+            by_time[sample.at] = sample
+    return sorted(by_time.values(), key=lambda sample: sample.at)
 
 
 def _reconstructed_civil_samples(

@@ -237,6 +237,49 @@ def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None
     ]
 
 
+def test_initial_on_state_during_ramp_is_not_manual_override(monkeypatch) -> None:
+    """State discovery after HA restart should not stand down an active ramp."""
+    runtime = LightRuntime(
+        config=SimpleNamespace(
+            entity_id="light.test",
+            enabled=True,
+            apply_on_recovered_on=True,
+        )
+    )
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._sun_samples = []
+    controller._automation_context_ids = []
+    controller.hass = SimpleNamespace(async_create_task=lambda task: task)
+    tasks = []
+
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: object())
+    monkeypatch.setattr(
+        controller,
+        "_async_handle_turn_on",
+        lambda call_runtime: tasks.append(call_runtime),
+    )
+
+    controller._async_light_changed(
+        SimpleNamespace(
+            data={
+                "entity_id": "light.test",
+                "old_state": None,
+                "new_state": SimpleNamespace(
+                    state="on",
+                    attributes={},
+                    context=SimpleNamespace(id="restore", parent_id=None, user_id=None),
+                ),
+            }
+        )
+    )
+
+    assert runtime.stood_down is False
+    assert runtime.stood_down_window is None
+    assert runtime.last_target is None
+    assert tasks == [runtime]
+
+
 def test_tick_refreshes_civil_sun_samples_from_current_sun_state(monkeypatch) -> None:
     """A missed sun listener update must not leave civil dusk stuck on high."""
     now = datetime(2026, 5, 7, 23, 19, tzinfo=ZoneInfo("Europe/Amsterdam"))
@@ -343,6 +386,49 @@ def test_tick_schedules_wake_from_upcoming_civil_dusk(monkeypatch) -> None:
     asyncio.run(controller.async_tick())
 
     assert wake_calls == [(now, next_dusk)]
+
+
+def test_sun_sample_refresh_preserves_exact_civil_crossing_marker(monkeypatch) -> None:
+    """A raw below-threshold refresh must not erase the ramp-start marker."""
+    now = datetime(2026, 5, 18, 22, 5, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    config = ResolvedLightConfig(
+        entity_id="light.test",
+        enabled=True,
+        min_brightness_pct=30,
+        max_brightness_pct=80,
+        min_color=None,
+        max_color=None,
+        dim_schedule=ScheduleConfig(ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK),
+        brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:30:00"),
+        ramp_duration=timedelta(hours=1),
+        override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+        override_grace_period=None,
+        split_turn_on_calls=False,
+        apply_on_recovered_on=True,
+    )
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._sun_samples = [
+        coordinator.SunElevationSample(now, coordinator.CIVIL_ELEVATION)
+    ]
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+
+    controller._record_sun_sample(
+        SimpleNamespace(
+            attributes={
+                "elevation": -6.01,
+                "next_dawn": "2026-05-19T03:00:00+00:00",
+                "next_dusk": None,
+            }
+        )
+    )
+
+    assert controller._sun_samples == [
+        coordinator.SunElevationSample(now, coordinator.CIVIL_ELEVATION)
+    ]
+    assert coordinator.target_for_now(config, now, controller._sun_samples) == (
+        LightTarget(80)
+    )
 
 
 def test_tick_records_last_decision_for_diagnostics(monkeypatch) -> None:
