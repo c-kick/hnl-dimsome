@@ -1,5 +1,7 @@
 # Dimsome
 
+<img width="1048" height="242" alt="image" src="https://github.com/user-attachments/assets/45ee9bda-f054-4f88-b1e6-e0d03d36f0ab" />
+
 Dimsome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming.
 
 It controls configured lights with two daily ramps:
