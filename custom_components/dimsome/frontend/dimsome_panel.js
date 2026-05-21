@@ -1636,7 +1636,6 @@ class DimsomePanel extends HTMLElement {
           margin-top: 4px;
         }
         .sun-curve {
-          background: var(--secondary-background-color);
           border-radius: 12px;
           display: block;
           height: auto;
