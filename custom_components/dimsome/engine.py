@@ -393,6 +393,8 @@ def should_ignore_state_change(
         return False
     if expected_target is None:
         return True
+    if attrs.get("brightness") is None:
+        return True
     return target_matches_state(expected_target, attrs)
 
 

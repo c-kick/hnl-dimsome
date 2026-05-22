@@ -730,6 +730,19 @@ def test_in_flight_update_is_not_manual_override() -> None:
     )
 
 
+def test_incomplete_update_during_ignore_window_is_not_manual_override() -> None:
+    """Some lights report on/color state before brightness settles."""
+    now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
+
+    assert should_ignore_state_change(
+        in_flight=False,
+        now=now,
+        ignore_updates_until=now + timedelta(seconds=10),
+        expected_target=LightTarget(59, ColorTarget(ColorMode.COLOR_TEMP_KELVIN, 2372)),
+        attrs={"color_temp_kelvin": 2372},
+    )
+
+
 def test_non_matching_update_after_ignore_window_is_external() -> None:
     """After the guard expires, changed attrs are treated as external."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)

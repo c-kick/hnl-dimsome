@@ -83,6 +83,32 @@ const durationToSeconds = (value, fallback = 0.5) => {
 
 const getPath = (object, path) => path.split(".").reduce((value, key) => value?.[key], object);
 
+const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+
+const hasTimingOverride = (light) => (
+  hasOwn(light, "dim_schedule")
+  || hasOwn(light, "brighten_schedule")
+  || hasOwn(light, "ramp_duration")
+  || hasOwn(light, "override_resume_mode")
+  || hasOwn(light, "override_grace_period")
+);
+
+const enableTimingOverride = (light, global) => {
+  light.dim_schedule = clone(global.dim_schedule);
+  light.brighten_schedule = clone(global.brighten_schedule);
+  light.ramp_duration = global.ramp_duration;
+  light.override_resume_mode = global.override_resume_mode;
+  light.override_grace_period = global.override_grace_period;
+};
+
+const disableTimingOverride = (light) => {
+  delete light.dim_schedule;
+  delete light.brighten_schedule;
+  delete light.ramp_duration;
+  delete light.override_resume_mode;
+  delete light.override_grace_period;
+};
+
 const setPath = (object, path, value) => {
   const parts = path.split(".");
   let current = object;
@@ -125,6 +151,18 @@ const clampPct = (value, fallback) => {
 
 const formatTime = (date) =>
   `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+
+const formatScheduleSummary = (schedule) => {
+  if (!schedule) return "";
+  if (schedule.type === "fixed_time") return schedule.at || "fixed time";
+  if (schedule.event === "civil_dawn") return "civil dawn";
+  if (schedule.event === "civil_dusk") return "civil dusk";
+  return schedule.event || schedule.type || "";
+};
+
+const defaultFixedTimeForPath = (path) => (
+  path.includes("dim_schedule") ? "20:00:00" : "06:00:00"
+);
 
 const formatRelative = (target, now) => {
   let secs = Math.round((target - now) / 1000);
@@ -371,17 +409,9 @@ class DimsomePanel extends HTMLElement {
       const index = Number(control.dataset.overrideToggle);
       const light = this._config.lights[index];
       if (control.checked) {
-        light.dim_schedule = clone(this._config.global.dim_schedule);
-        light.brighten_schedule = clone(this._config.global.brighten_schedule);
-        light.ramp_duration = this._config.global.ramp_duration;
-        light.override_resume_mode = this._config.global.override_resume_mode;
-        light.override_grace_period = this._config.global.override_grace_period;
+        enableTimingOverride(light, this._config.global);
       } else {
-        delete light.dim_schedule;
-        delete light.brighten_schedule;
-        delete light.ramp_duration;
-        delete light.override_resume_mode;
-        delete light.override_grace_period;
+        disableTimingOverride(light);
       }
       this._render();
     }
@@ -398,7 +428,7 @@ class DimsomePanel extends HTMLElement {
     const schedulePath = path.slice(0, -5);
     const schedule = getPath(this._config, schedulePath);
     if (schedule.type === "fixed_time") {
-      schedule.at ||= "06:00:00";
+      schedule.at ||= defaultFixedTimeForPath(schedulePath);
       delete schedule.event;
     } else {
       schedule.event ||= "civil_dusk";
@@ -699,11 +729,11 @@ class DimsomePanel extends HTMLElement {
     const now = new Date();
     const windows = this._scheduleWindows(now);
     const statuses = Object.values(this._runtime || {});
-    const ramping = statuses.find((s) => s?.status === "ramping");
+    const activeRamp = statuses.find((s) => s?.active_window);
 
     let headline;
-    if (ramping) {
-      const seq = ramping?.active_window?.sequence;
+    if (activeRamp) {
+      const seq = activeRamp?.active_window?.sequence;
       headline = seq === "brighten" ? "Brightening" : "Dimming";
     } else {
       const elev = solarElevation(windows.lat, windows.lon, now);
@@ -718,6 +748,10 @@ class DimsomePanel extends HTMLElement {
     const subParts = [];
     const totalLights = this._config.lights.length;
     if (totalLights) subParts.push(`${totalLights} light${totalLights === 1 ? "" : "s"}`);
+    const activeRampCount = statuses.filter((s) => s?.active_window).length;
+    if (activeRampCount) {
+      subParts.push(`${activeRampCount} in active ramp`);
+    }
     if (next) subParts.push(`next ${next.kind} at ${formatTime(next.at)} (${formatRelative(next.at, now)})`);
 
     return `
@@ -762,7 +796,7 @@ class DimsomePanel extends HTMLElement {
           ${type === "fixed_time" ? `
             ${this._renderField("Time", `
               <ha-selector
-                data-value="${escapeHtml(schedule.at || "06:00:00")}"
+                data-value="${escapeHtml(schedule.at || defaultFixedTimeForPath(path))}"
                 data-path="${path}.at"
                 data-selector="time"
               ></ha-selector>
@@ -868,7 +902,12 @@ class DimsomePanel extends HTMLElement {
   _renderLight(light, index) {
     const state = this._lightStates[light.entity_id] || {};
     const hasColor = Boolean(light.min_color && light.max_color);
-    const hasOverrides = Boolean(light.dim_schedule || light.brighten_schedule || light.ramp_duration || light.override_resume_mode);
+    const hasOverrides = hasTimingOverride(light);
+    const overrideDetails = hasOverrides ? [
+      `dim ${formatScheduleSummary(light.dim_schedule || this._config.global.dim_schedule)}`,
+      `brighten ${formatScheduleSummary(light.brighten_schedule || this._config.global.brighten_schedule)}`,
+      `ramp ${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))} min`,
+    ].join(" · ") : "Using global timing";
     const entityName = formatEntityName(state, light.entity_id);
     return `
       <ha-card class="light-card" data-entity-id="${escapeHtml(light.entity_id)}">
@@ -886,6 +925,11 @@ class DimsomePanel extends HTMLElement {
               </div>
             </div>
             <div class="light-actions">
+              ${hasOverrides ? `
+                <span class="status-chip status-custom-schedule">
+                  <span class="chip-dot"></span>Custom schedule
+                </span>
+              ` : ""}
               ${this._renderStatusChip(light.entity_id)}
               <ha-icon-button
                 label="Resume this light"
@@ -1013,7 +1057,7 @@ class DimsomePanel extends HTMLElement {
             outlined
             class="light-override"
             header="Custom schedule"
-            secondary="Override the global timing for this light"
+            secondary="${escapeHtml(overrideDetails)}"
             ${hasOverrides ? "expanded" : ""}
           >
           <div class="settings-list">
@@ -1728,6 +1772,10 @@ class DimsomePanel extends HTMLElement {
         .status-chip.status-tracking {
           background: color-mix(in srgb, var(--success-color, #43a047) 14%, transparent);
           color: var(--success-color, #43a047);
+        }
+        .status-chip.status-custom-schedule {
+          background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+          color: var(--primary-color);
         }
         .status-chip.status-manual_override {
           background: color-mix(in srgb, var(--warning-color, #ffb300) 22%, transparent);
