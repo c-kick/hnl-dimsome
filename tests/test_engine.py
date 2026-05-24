@@ -27,6 +27,7 @@ from custom_components.dimsome.engine import (
     target_for_window,
     target_matches_state,
     upcoming_civil_samples,
+    update_civil_event_cache,
 )
 from custom_components.dimsome.models import (
     ColorMode,
@@ -685,6 +686,68 @@ def test_upcoming_civil_dusk_produces_active_ramp_target() -> None:
 
     assert target is not None
     assert target.brightness_pct == 45
+
+
+def test_civil_event_cache_keeps_active_dusk_when_next_dusk_rolls_tomorrow() -> None:
+    """Dimsome-owned dusk anchors must survive HA rolling next_dusk during ramp."""
+    cache = {}
+    before_dusk = datetime(2026, 5, 24, 21, 55, tzinfo=TZ)
+    during_dusk = datetime(2026, 5, 24, 22, 34, tzinfo=TZ)
+    today_dusk = datetime(2026, 5, 24, 20, 0, tzinfo=ZoneInfo("UTC"))
+    tomorrow_dusk = datetime(2026, 5, 25, 19, 59, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=before_dusk,
+        next_dawn="2026-05-25T03:00:00+00:00",
+        next_dusk=today_dusk.isoformat(),
+        ramp_duration=timedelta(hours=1),
+    )
+    update_civil_event_cache(
+        cache,
+        now=during_dusk,
+        next_dawn="2026-05-25T03:00:00+00:00",
+        next_dusk=tomorrow_dusk.isoformat(),
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache[SunEvent.CIVIL_DUSK] == today_dusk
+
+
+def test_civil_event_cache_keeps_imminent_dusk_when_next_dusk_rolls_early() -> None:
+    """A stored upcoming dusk must not be replaced before its ramp starts."""
+    cache = {SunEvent.CIVIL_DUSK: datetime(2026, 5, 24, 20, 0, tzinfo=ZoneInfo("UTC"))}
+    before_dusk = datetime(2026, 5, 24, 21, 59, tzinfo=TZ)
+    tomorrow_dusk = datetime(2026, 5, 25, 19, 59, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=before_dusk,
+        next_dawn="2026-05-25T03:00:00+00:00",
+        next_dusk=tomorrow_dusk.isoformat(),
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache[SunEvent.CIVIL_DUSK] == datetime(
+        2026, 5, 24, 20, 0, tzinfo=ZoneInfo("UTC")
+    )
+
+
+def test_civil_event_cache_accepts_next_dusk_after_active_dusk_ramp() -> None:
+    """Once the dusk ramp is over, Dimsome can store tomorrow's next_dusk."""
+    cache = {SunEvent.CIVIL_DUSK: datetime(2026, 5, 24, 20, 0, tzinfo=ZoneInfo("UTC"))}
+    after_dusk = datetime(2026, 5, 24, 23, 5, tzinfo=TZ)
+    tomorrow_dusk = datetime(2026, 5, 25, 19, 59, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=after_dusk,
+        next_dawn="2026-05-25T03:00:00+00:00",
+        next_dusk=tomorrow_dusk.isoformat(),
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache[SunEvent.CIVIL_DUSK] == tomorrow_dusk
 
 
 def test_target_matching_uses_tolerance() -> None:

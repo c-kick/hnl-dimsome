@@ -388,6 +388,66 @@ def test_tick_schedules_wake_from_upcoming_civil_dusk(monkeypatch) -> None:
     assert wake_calls == [(now, next_dusk)]
 
 
+def test_tick_keeps_cached_dusk_when_home_assistant_rolls_next_dusk(monkeypatch) -> None:
+    """The active dusk ramp must use Dimsome's stored dusk after HA rolls next_dusk."""
+    before_dusk = datetime(2026, 5, 24, 21, 55, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    during_dusk = datetime(2026, 5, 24, 22, 34, tzinfo=ZoneInfo("Europe/Amsterdam"))
+    today_dusk = datetime(2026, 5, 24, 20, 0, tzinfo=ZoneInfo("UTC"))
+    tomorrow_dusk = datetime(2026, 5, 25, 19, 59, tzinfo=ZoneInfo("UTC"))
+    config = ResolvedLightConfig(
+        entity_id="light.test",
+        enabled=True,
+        min_brightness_pct=30,
+        max_brightness_pct=80,
+        min_color=None,
+        max_color=None,
+        dim_schedule=ScheduleConfig(ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK),
+        brighten_schedule=ScheduleConfig(ScheduleType.FIXED_TIME, at="06:30:00"),
+        ramp_duration=timedelta(hours=1),
+        override_resume_mode=OverrideResumeMode.MANUAL_ONLY,
+        override_grace_period=None,
+        split_turn_on_calls=False,
+        apply_on_recovered_on=True,
+    )
+    runtime = LightRuntime(config=config)
+    sun_attrs = {
+        "elevation": -5.4,
+        "next_dawn": "2026-05-25T03:00:00+00:00",
+        "next_dusk": today_dusk.isoformat(),
+    }
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._sun_samples = []
+    controller._civil_event_cache = {}
+    controller._ramp_unsub = None
+    controller._wake_unsub = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                state="below_horizon" if entity_id == coordinator.SUN_ENTITY_ID else "on",
+                attributes=sun_attrs if entity_id == coordinator.SUN_ENTITY_ID else {},
+            )
+        )
+    )
+    calls = []
+
+    async def fake_apply(_: LightRuntime, target: LightTarget) -> None:
+        calls.append(target)
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: before_dusk)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+    monkeypatch.setattr(controller, "_schedule_wake_timer", lambda *_: None)
+
+    asyncio.run(controller.async_tick())
+
+    sun_attrs.update({"elevation": -6.5, "next_dusk": tomorrow_dusk.isoformat()})
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: during_dusk)
+
+    asyncio.run(controller.async_tick())
+
+    assert calls == [LightTarget(52)]
+
+
 def test_sun_sample_refresh_preserves_exact_civil_crossing_marker(monkeypatch) -> None:
     """A raw below-threshold refresh must not erase the ramp-start marker."""
     now = datetime(2026, 5, 18, 22, 5, tzinfo=ZoneInfo("Europe/Amsterdam"))

@@ -30,6 +30,7 @@ from .engine import (
     SunElevationSample,
     active_window,
     brightness_pct_to_ha,
+    civil_event_cache_samples,
     next_window_start,
     reconstructed_civil_samples,
     should_clear_manual_override_for_window,
@@ -40,6 +41,7 @@ from .engine import (
     target_matches_state,
     target_for_now,
     upcoming_civil_samples,
+    update_civil_event_cache,
 )
 from .models import (
     ColorMode,
@@ -88,6 +90,7 @@ class DimsomeController:
         self._wake_unsub: Any | None = None
         self._sun_refresh_unsub: Any | None = None
         self._sun_samples: list[SunElevationSample] = []
+        self._civil_event_cache: dict[SunEvent, datetime] = {}
         self._automation_context_ids: list[str] = []
 
     async def async_start(self) -> None:
@@ -518,6 +521,21 @@ class DimsomeController:
         elevation = _state_elevation(state)
         if elevation is None:
             return
+        cache = getattr(self, "_civil_event_cache", None)
+        if cache is None:
+            cache = self._civil_event_cache = {}
+        if state is not None:
+            update_civil_event_cache(
+                cache,
+                now=dt_util.now(),
+                next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
+                next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
+                ramp_duration=max(
+                    (runtime.config.ramp_duration for runtime in self.lights.values()),
+                    default=timedelta(0),
+                ),
+            )
+        self._sun_samples.extend(civil_event_cache_samples(cache))
         self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
         self._sun_samples.extend(_upcoming_civil_samples(state))
         self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))

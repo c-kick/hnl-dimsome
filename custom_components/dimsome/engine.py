@@ -172,6 +172,51 @@ def upcoming_civil_samples(
     return samples
 
 
+def update_civil_event_cache(
+    cache: dict[SunEvent, datetime],
+    *,
+    now: datetime,
+    next_dawn: object,
+    next_dusk: object,
+    ramp_duration: timedelta,
+) -> None:
+    """Store Dimsome-owned civil event anchors from sun.sun next attributes."""
+    for event, value in (
+        (SunEvent.CIVIL_DAWN, next_dawn),
+        (SunEvent.CIVIL_DUSK, next_dusk),
+    ):
+        if not isinstance(value, str):
+            continue
+        try:
+            candidate = datetime.fromisoformat(value)
+        except ValueError:
+            continue
+        cached = cache.get(event)
+        if cached is not None and now <= cached + ramp_duration:
+            continue
+        cache[event] = candidate
+
+
+def civil_event_cache_samples(
+    cache: dict[SunEvent, datetime],
+) -> list[SunElevationSample]:
+    """Return synthetic crossing samples for cached civil event anchors."""
+    samples: list[SunElevationSample] = []
+    for event, at in cache.items():
+        before_elevation = (
+            CIVIL_ELEVATION - 1
+            if event is SunEvent.CIVIL_DAWN
+            else CIVIL_ELEVATION + 1
+        )
+        samples.extend(
+            [
+                SunElevationSample(at - timedelta(seconds=1), before_elevation),
+                SunElevationSample(at, CIVIL_ELEVATION),
+            ]
+        )
+    return samples
+
+
 def schedule_start(
     schedule: ScheduleConfig,
     day: datetime,
