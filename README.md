@@ -15,7 +15,7 @@ By default, Dimsome dims at civil dusk and brightens at civil dawn. Each ramp ca
 
 - Home Assistant config flow setup
 - Dimsome sidebar panel for managing global defaults and per-light settings
-- Civil dusk and civil dawn schedules derived from `sun.sun`
+- Civil dusk and civil dawn schedules anchored from `sun.sun` and cached by Dimsome
 - Fixed-time dimming and brightening schedules
 - Per-light minimum and maximum brightness targets
 - Optional `color_temp_kelvin` targets
@@ -66,7 +66,9 @@ Outside active ramps, Dimsome applies the correct plateau target when a controll
 
 If a light is manually changed during an active ramp, Dimsome stands down for that light for the rest of that ramp. Use the resume button or `dimsome.resume` service to hand control back sooner.
 
-Civil dawn and dusk are calculated from Home Assistant's `sun.sun` state and next-event attributes. Dimsome periodically refreshes this state so behavior remains deterministic across restarts and missed events.
+Civil dawn and dusk are anchored from Home Assistant's `sun.sun` state and next-event attributes. Dimsome stores the next civil dawn and dusk times in its own runtime cache, persists that cache across restarts, and keeps using a stored anchor through the end of its ramp. This avoids depending on Home Assistant's rolling `next_dawn` and `next_dusk` values during an active dawn or dusk ramp.
+
+If Dimsome starts without a stored anchor, it reconstructs the current phase from `sun.sun` elevation and next-event attributes. Once a valid next dawn or dusk is seen, Dimsome stores it for subsequent ticks and restarts.
 
 ## Configuration
 
@@ -102,7 +104,7 @@ Dimsome creates helper entities for configured lights:
 - `button.dimsome_resume` resumes Dimsome control for all configured lights.
 - Per-light resume buttons resume Dimsome control for one light.
 - Per-light `Dimsome enabled` switches enable or pause Dimsome control for one light.
-- Per-light diagnostic sensors expose runtime state such as `status`, `active_window`, `next_window_start`, `target`, and manual override state.
+- Per-light diagnostic sensors expose runtime state such as `status`, `active_window`, `civil_event_cache`, `next_window_start`, `target`, and manual override state.
 
 During an active ramp, `next_window_start` points to the following ramp. Use `active_window` and `target` to determine whether Dimsome is currently ramping correctly.
 
