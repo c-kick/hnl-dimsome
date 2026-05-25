@@ -117,29 +117,13 @@ def reconstructed_civil_samples(
     value = next_dusk if is_after_dusk else next_dawn
     next_event = parse_datetime(value)
     if next_event is None:
-        return _fallback_civil_night_samples(is_after_dusk, next_dawn)
+        return []
     previous_event = next_event - timedelta(days=1)
     if now is not None and previous_event > now:
         previous_event = now
     before_elevation = CIVIL_ELEVATION + 1 if is_after_dusk else CIVIL_ELEVATION - 1
     return [
         SunElevationSample(previous_event - timedelta(seconds=1), before_elevation),
-        SunElevationSample(previous_event, CIVIL_ELEVATION),
-    ]
-
-
-def _fallback_civil_night_samples(
-    is_after_dusk: bool, next_dawn: object
-) -> list[SunElevationSample]:
-    """Infer a previous dusk marker when current elevation proves civil night."""
-    if not is_after_dusk:
-        return []
-    next_event = parse_datetime(next_dawn)
-    if next_event is None:
-        return []
-    previous_event = next_event - timedelta(hours=8)
-    return [
-        SunElevationSample(previous_event - timedelta(seconds=1), CIVIL_ELEVATION + 1),
         SunElevationSample(previous_event, CIVIL_ELEVATION),
     ]
 
@@ -172,8 +156,9 @@ def update_civil_event_cache(
     next_dawn: object,
     next_dusk: object,
     ramp_duration: timedelta,
-) -> None:
+) -> bool:
     """Store Dimsome-owned civil event anchors from sun.sun next attributes."""
+    changed = False
     for event, value in (
         (SunEvent.CIVIL_DAWN, next_dawn),
         (SunEvent.CIVIL_DUSK, next_dusk),
@@ -184,7 +169,11 @@ def update_civil_event_cache(
         cached = cache.get(event)
         if cached is not None and now <= cached + ramp_duration:
             continue
+        if cached == candidate:
+            continue
         cache[event] = candidate
+        changed = True
+    return changed
 
 
 def civil_event_cache_samples(
@@ -217,6 +206,27 @@ def parse_datetime(value: object) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def serialize_civil_event_cache(cache: dict[SunEvent, datetime]) -> dict[str, str]:
+    """Serialize cached civil anchors for Home Assistant storage."""
+    return {event.value: at.isoformat() for event, at in cache.items()}
+
+
+def restore_civil_event_cache(value: object) -> dict[SunEvent, datetime]:
+    """Restore cached civil anchors from Home Assistant storage."""
+    if not isinstance(value, dict):
+        return {}
+    cache: dict[SunEvent, datetime] = {}
+    for key, raw_at in value.items():
+        try:
+            event = SunEvent(key)
+        except ValueError:
+            continue
+        at = parse_datetime(raw_at)
+        if at is not None:
+            cache[event] = at
+    return cache
 
 
 def schedule_start(

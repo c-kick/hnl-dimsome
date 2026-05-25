@@ -45,7 +45,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> bool:
     """Set up Dimsome from a config entry."""
     from .coordinator import DimsomeController
+    from .engine import restore_civil_event_cache
     from .models import resolve_light_configs
+    from homeassistant.helpers.storage import Store
 
     raw_config = {**entry.data, **entry.options}
     try:
@@ -70,7 +72,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
         )
         return False
 
-    controller = DimsomeController(hass, entry.entry_id, light_configs)
+    civil_event_store = Store(
+        hass, 1, f"{DOMAIN}_{entry.entry_id}_civil_event_cache"
+    )
+    civil_event_cache = restore_civil_event_cache(
+        await civil_event_store.async_load()
+    )
+
+    def _save_civil_event_cache(data: dict[str, str]) -> None:
+        civil_event_store.async_delay_save(lambda: data, 1)
+
+    controller = DimsomeController(
+        hass,
+        entry.entry_id,
+        light_configs,
+        civil_event_cache=civil_event_cache,
+        civil_event_cache_save=_save_civil_event_cache,
+    )
     entry.runtime_data = controller
     await controller.async_start()
     _migrate_per_light_entities(hass, entry.entry_id, controller.lights)

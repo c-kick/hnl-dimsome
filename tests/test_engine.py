@@ -17,6 +17,8 @@ from custom_components.dimsome.engine import (
     low_plateau_target,
     next_window_start,
     reconstructed_civil_samples,
+    restore_civil_event_cache,
+    serialize_civil_event_cache,
     should_clear_manual_override_for_window,
     should_ignore_state_change,
     should_skip_for_manual_override,
@@ -492,11 +494,14 @@ def test_civil_night_without_next_dusk_stays_on_low_plateau() -> None:
     target = target_for_now(
         config,
         now,
-        reconstructed_civil_samples(
-            elevation=-14.0,
-            next_dawn="2026-05-15T03:02:21.933133+00:00",
-            next_dusk=None,
-        ),
+        [
+            *reconstructed_civil_samples(
+                elevation=-14.0,
+                next_dawn="2026-05-15T03:02:21.933133+00:00",
+                next_dusk=None,
+            ),
+            SunElevationSample(now, -14.0),
+        ],
     )
 
     assert target == LightTarget(
@@ -784,6 +789,25 @@ def test_civil_event_cache_accepts_next_dusk_after_active_dusk_ramp() -> None:
     )
 
     assert cache[SunEvent.CIVIL_DUSK] == tomorrow_dusk
+
+
+def test_civil_event_cache_round_trips_for_persistent_storage() -> None:
+    """Cached anchors should survive HA/Dimsome restart through storage."""
+    cache = {
+        SunEvent.CIVIL_DAWN: datetime(2026, 5, 26, 2, 44, 56, tzinfo=ZoneInfo("UTC")),
+        SunEvent.CIVIL_DUSK: datetime(2026, 5, 25, 20, 28, 58, tzinfo=ZoneInfo("UTC")),
+    }
+
+    assert restore_civil_event_cache(serialize_civil_event_cache(cache)) == cache
+
+
+def test_civil_night_without_next_dusk_uses_current_elevation_only() -> None:
+    """Without a cached or next dusk anchor, Dimsome must not invent a ramp start."""
+    assert reconstructed_civil_samples(
+        elevation=-14.0,
+        next_dawn="2026-05-26T02:44:56+00:00",
+        next_dusk=None,
+    ) == []
 
 
 def test_target_matching_uses_tolerance() -> None:

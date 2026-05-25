@@ -38,6 +38,7 @@ from .engine import (
     should_skip_for_manual_override,
     should_stand_down_for_context,
     split_turn_on_service_data,
+    serialize_civil_event_cache,
     target_matches_state,
     target_for_now,
     upcoming_civil_samples,
@@ -78,6 +79,8 @@ class DimsomeController:
         hass: HomeAssistant,
         entry_id: str,
         light_configs: list[ResolvedLightConfig],
+        civil_event_cache: dict[SunEvent, datetime] | None = None,
+        civil_event_cache_save: Any | None = None,
     ) -> None:
         """Initialize the controller."""
         self.hass = hass
@@ -90,7 +93,8 @@ class DimsomeController:
         self._wake_unsub: Any | None = None
         self._sun_refresh_unsub: Any | None = None
         self._sun_samples: list[SunElevationSample] = []
-        self._civil_event_cache: dict[SunEvent, datetime] = {}
+        self._civil_event_cache = civil_event_cache or {}
+        self._civil_event_cache_save = civil_event_cache_save
         self._automation_context_ids: list[str] = []
 
     async def async_start(self) -> None:
@@ -203,6 +207,12 @@ class DimsomeController:
             "stood_down": runtime.stood_down,
             "stood_down_window": _window_status(runtime.stood_down_window),
             "active_window": _window_status(window),
+            "civil_event_cache": {
+                event.value: _datetime_status(at)
+                for event, at in sorted(
+                    self._civil_event_cache.items(), key=lambda item: item[0].value
+                )
+            },
             "next_window_start": _datetime_status(
                 next_window_start(runtime.config, now, self._sun_samples)
             ),
@@ -525,7 +535,7 @@ class DimsomeController:
         if cache is None:
             cache = self._civil_event_cache = {}
         if state is not None:
-            update_civil_event_cache(
+            cache_changed = update_civil_event_cache(
                 cache,
                 now=dt_util.now(),
                 next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
@@ -535,6 +545,8 @@ class DimsomeController:
                     default=timedelta(0),
                 ),
             )
+            if cache_changed and self._civil_event_cache_save is not None:
+                self._civil_event_cache_save(serialize_civil_event_cache(cache))
         self._sun_samples.extend(civil_event_cache_samples(cache))
         self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
         self._sun_samples.extend(_upcoming_civil_samples(state))
