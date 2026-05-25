@@ -791,6 +791,49 @@ def test_civil_event_cache_accepts_next_dusk_after_active_dusk_ramp() -> None:
     assert cache[SunEvent.CIVIL_DUSK] == tomorrow_dusk
 
 
+def test_civil_event_cache_keeps_active_dawn_when_next_dawn_rolls_tomorrow() -> None:
+    """Dimsome-owned dawn anchors must survive HA rolling next_dawn during ramp."""
+    cache = {}
+    before_dawn = datetime(2026, 5, 26, 4, 40, tzinfo=TZ)
+    during_dawn = datetime(2026, 5, 26, 5, 5, tzinfo=TZ)
+    today_dawn = datetime(2026, 5, 26, 2, 44, tzinfo=ZoneInfo("UTC"))
+    tomorrow_dawn = datetime(2026, 5, 27, 2, 43, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=before_dawn,
+        next_dawn=today_dawn.isoformat(),
+        next_dusk="2026-05-26T20:28:00+00:00",
+        ramp_duration=timedelta(hours=1),
+    )
+    update_civil_event_cache(
+        cache,
+        now=during_dawn,
+        next_dawn=tomorrow_dawn.isoformat(),
+        next_dusk="2026-05-26T20:28:00+00:00",
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache[SunEvent.CIVIL_DAWN] == today_dawn
+
+
+def test_civil_event_cache_accepts_next_dawn_after_active_dawn_ramp() -> None:
+    """Once the dawn ramp is over, Dimsome can store tomorrow's next_dawn."""
+    cache = {SunEvent.CIVIL_DAWN: datetime(2026, 5, 26, 2, 44, tzinfo=ZoneInfo("UTC"))}
+    after_dawn = datetime(2026, 5, 26, 6, 0, tzinfo=TZ)
+    tomorrow_dawn = datetime(2026, 5, 27, 2, 43, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=after_dawn,
+        next_dawn=tomorrow_dawn.isoformat(),
+        next_dusk="2026-05-26T20:28:00+00:00",
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache[SunEvent.CIVIL_DAWN] == tomorrow_dawn
+
+
 def test_civil_event_cache_round_trips_for_persistent_storage() -> None:
     """Cached anchors should survive HA/Dimsome restart through storage."""
     cache = {
