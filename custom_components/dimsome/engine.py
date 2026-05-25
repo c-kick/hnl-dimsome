@@ -115,11 +115,8 @@ def reconstructed_civil_samples(
     """Reconstruct the last civil crossing from sun.sun's next event attributes."""
     is_after_dusk = elevation < CIVIL_ELEVATION
     value = next_dusk if is_after_dusk else next_dawn
-    if not isinstance(value, str):
-        return _fallback_civil_night_samples(is_after_dusk, next_dawn)
-    try:
-        next_event = datetime.fromisoformat(value)
-    except ValueError:
+    next_event = parse_datetime(value)
+    if next_event is None:
         return _fallback_civil_night_samples(is_after_dusk, next_dawn)
     previous_event = next_event - timedelta(days=1)
     if now is not None and previous_event > now:
@@ -135,11 +132,10 @@ def _fallback_civil_night_samples(
     is_after_dusk: bool, next_dawn: object
 ) -> list[SunElevationSample]:
     """Infer a previous dusk marker when current elevation proves civil night."""
-    if not is_after_dusk or not isinstance(next_dawn, str):
+    if not is_after_dusk:
         return []
-    try:
-        next_event = datetime.fromisoformat(next_dawn)
-    except ValueError:
+    next_event = parse_datetime(next_dawn)
+    if next_event is None:
         return []
     previous_event = next_event - timedelta(hours=8)
     return [
@@ -157,11 +153,8 @@ def upcoming_civil_samples(
         (next_dawn, CIVIL_ELEVATION - 1),
         (next_dusk, CIVIL_ELEVATION + 1),
     ):
-        if not isinstance(value, str):
-            continue
-        try:
-            next_event = datetime.fromisoformat(value)
-        except ValueError:
+        next_event = parse_datetime(value)
+        if next_event is None:
             continue
         samples.extend(
             [
@@ -185,11 +178,8 @@ def update_civil_event_cache(
         (SunEvent.CIVIL_DAWN, next_dawn),
         (SunEvent.CIVIL_DUSK, next_dusk),
     ):
-        if not isinstance(value, str):
-            continue
-        try:
-            candidate = datetime.fromisoformat(value)
-        except ValueError:
+        candidate = parse_datetime(value)
+        if candidate is None:
             continue
         cached = cache.get(event)
         if cached is not None and now <= cached + ramp_duration:
@@ -215,6 +205,18 @@ def civil_event_cache_samples(
             ]
         )
     return samples
+
+
+def parse_datetime(value: object) -> datetime | None:
+    """Parse a Home Assistant datetime attribute."""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def schedule_start(

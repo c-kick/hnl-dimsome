@@ -356,6 +356,22 @@ def test_reconstructs_previous_civil_dusk_when_started_after_dusk() -> None:
     ]
 
 
+def test_reconstructs_civil_dusk_from_datetime_attribute() -> None:
+    """Home Assistant may expose sun.sun next attributes as datetime objects."""
+    next_dusk = datetime(2026, 5, 26, 20, 28, tzinfo=ZoneInfo("UTC"))
+    now = datetime(2026, 5, 25, 22, 27, tzinfo=TZ)
+
+    assert reconstructed_civil_samples(
+        elevation=-6.05,
+        next_dawn=datetime(2026, 5, 26, 2, 44, tzinfo=ZoneInfo("UTC")),
+        next_dusk=next_dusk,
+        now=now,
+    ) == [
+        SunElevationSample(now - timedelta(seconds=1), -5.0),
+        SunElevationSample(now, -6.0),
+    ]
+
+
 def test_reconstructs_previous_civil_dawn_when_started_after_dawn() -> None:
     """Startup after civil dawn can reconstruct an active brighten ramp."""
     next_dawn = datetime(2026, 5, 5, 5, 21, tzinfo=TZ)
@@ -712,6 +728,26 @@ def test_civil_event_cache_keeps_active_dusk_when_next_dusk_rolls_tomorrow() -> 
     )
 
     assert cache[SunEvent.CIVIL_DUSK] == today_dusk
+
+
+def test_civil_event_cache_accepts_datetime_attributes() -> None:
+    """Cache updates should accept Home Assistant's native datetime attributes."""
+    cache = {}
+    next_dawn = datetime(2026, 5, 26, 2, 44, tzinfo=ZoneInfo("UTC"))
+    next_dusk = datetime(2026, 5, 25, 20, 27, tzinfo=ZoneInfo("UTC"))
+
+    update_civil_event_cache(
+        cache,
+        now=datetime(2026, 5, 25, 22, 0, tzinfo=TZ),
+        next_dawn=next_dawn,
+        next_dusk=next_dusk,
+        ramp_duration=timedelta(hours=1),
+    )
+
+    assert cache == {
+        SunEvent.CIVIL_DAWN: next_dawn,
+        SunEvent.CIVIL_DUSK: next_dusk,
+    }
 
 
 def test_civil_event_cache_keeps_imminent_dusk_when_next_dusk_rolls_early() -> None:
