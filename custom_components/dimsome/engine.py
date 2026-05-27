@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from math import isclose
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 from .models import (
     ColorMode,
@@ -400,6 +403,22 @@ def target_for_now(
     window = active_window(config, now, sun_samples)
     if window is not None:
         return target_for_window(config, window, now)
+    elevation = latest_sun_elevation(now, sun_samples)
+    civil_night = is_civil_night(now, sun_samples)
+    windows = candidate_windows(config, now, sun_samples)
+    prev_windows = [w for w in windows if w.end <= now]
+    near_windows = [w for w in windows if abs((w.start - now).total_seconds()) < 7200]
+    if civil_night or near_windows:
+        _LOGGER.warning(
+            "DIAG %s now=%s elevation=%.2f civil_night=%s no_active_window "
+            "all_windows=%s samples=%d",
+            config.entity_id,
+            now.isoformat(),
+            elevation if elevation is not None else -99.0,
+            civil_night,
+            [(w.sequence, w.start.isoformat(), w.end.isoformat()) for w in windows],
+            len(sun_samples),
+        )
     if is_low_plateau(config, now, sun_samples):
         return low_plateau_target(config)
     if is_high_plateau(config, now, sun_samples):

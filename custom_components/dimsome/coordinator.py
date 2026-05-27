@@ -270,6 +270,29 @@ class DimsomeController:
             ):
                 next_start = candidate_start
             target = target_for_now(runtime.config, now, self._sun_samples)
+            if window is None and target is not None:
+                from .engine import (
+                    candidate_windows as _cw,
+                    is_civil_night as _icn,
+                    latest_sun_elevation as _lse,
+                )
+                elevation = _lse(now, self._sun_samples)
+                civil_night = _icn(now, self._sun_samples)
+                all_windows = _cw(runtime.config, now, self._sun_samples)
+                if civil_night or any(
+                    abs((w.start - now).total_seconds()) < 7200 for w in all_windows
+                ):
+                    _LOGGER.warning(
+                        "DIAG %s now=%s elev=%.2f civil_night=%s window=None target=%s "
+                        "all_windows=%s samples=%d",
+                        runtime.config.entity_id,
+                        now.isoformat(),
+                        elevation if elevation is not None else -99.0,
+                        civil_night,
+                        target,
+                        [(w.sequence, w.start.isoformat(), w.end.isoformat()) for w in all_windows],
+                        len(self._sun_samples),
+                    )
             if target is None:
                 runtime.last_target = None
                 self._record_decision(runtime, "no_target", now)
