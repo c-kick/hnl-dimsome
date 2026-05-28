@@ -261,9 +261,6 @@ class DimsomePanel extends HTMLElement {
     this._narrow = narrow;
     const menuBtn = this.shadowRoot?.querySelector("ha-menu-button");
     if (menuBtn) menuBtn.narrow = narrow;
-    this.shadowRoot?.querySelectorAll("ha-settings-row").forEach((row) => {
-      row.narrow = narrow;
-    });
   }
 
   get narrow() {
@@ -496,11 +493,6 @@ class DimsomePanel extends HTMLElement {
       menuBtn.hass = this._hass;
       menuBtn.narrow = this._narrow;
     }
-
-    // ha-settings-row uses the panel's narrow prop to stack heading/control.
-    this.shadowRoot.querySelectorAll("ha-settings-row").forEach((row) => {
-      row.narrow = this._narrow;
-    });
 
     // Icon button SVG paths
     this.shadowRoot.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
@@ -824,11 +816,13 @@ class DimsomePanel extends HTMLElement {
 
   _renderSetting(title, description, controlHtml) {
     return `
-      <ha-settings-row>
-        <span slot="heading">${escapeHtml(title)}</span>
-        <span slot="description">${escapeHtml(description)}</span>
-        ${controlHtml}
-      </ha-settings-row>
+      <div class="setting-row">
+        <div class="setting-copy">
+          <span class="setting-heading">${escapeHtml(title)}</span>
+          <span class="setting-description">${escapeHtml(description)}</span>
+        </div>
+        <div class="setting-control">${controlHtml}</div>
+      </div>
     `;
   }
 
@@ -1007,18 +1001,20 @@ class DimsomePanel extends HTMLElement {
               ></ha-switch>
             `)}
             ${this._renderSetting("Settle Delay", "Wait after this light turns on before applying the current target.", `
-              <ha-textfield
-                label="Seconds"
-                type="number"
-                min="0"
-                max="30"
-                step="0.1"
-                inputmode="decimal"
-                suffix="s"
-                data-value="${durationToSeconds(light.settle_delay)}"
-                data-path="lights.${index}.settle_delay"
-                data-number="float"
-              ></ha-textfield>
+              <div class="number-input-wrap" data-suffix="s">
+                <input
+                  class="native-number"
+                  aria-label="Settle Delay Seconds"
+                  type="number"
+                  min="0"
+                  max="30"
+                  step="0.1"
+                  inputmode="decimal"
+                  value="${durationToSeconds(light.settle_delay)}"
+                  data-path="lights.${index}.settle_delay"
+                  data-number="float"
+                >
+              </div>
             `)}
           </div>
           ${hasColor ? `
@@ -1398,6 +1394,46 @@ class DimsomePanel extends HTMLElement {
           cursor: not-allowed;
         }
 
+        .number-input-wrap {
+          position: relative;
+          width: 100%;
+        }
+
+        .number-input-wrap::after {
+          color: var(--secondary-text-color);
+          content: attr(data-suffix);
+          pointer-events: none;
+          position: absolute;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+        }
+
+        .native-number {
+          background-color: var(--card-background-color, var(--primary-background-color));
+          border: 1px solid var(--divider-color);
+          border-radius: 4px;
+          box-sizing: border-box;
+          color: var(--primary-text-color);
+          font: inherit;
+          font-size: 1rem;
+          line-height: 1.2;
+          min-height: 40px;
+          padding: 0 28px 0 12px;
+          transition: border-color 120ms ease, box-shadow 120ms ease;
+          width: 100%;
+        }
+
+        .native-number:hover {
+          border-color: var(--secondary-text-color);
+        }
+
+        .native-number:focus {
+          border-color: var(--primary-color);
+          box-shadow: 0 0 0 1px var(--primary-color);
+          outline: none;
+        }
+
         ha-button,
         ha-switch,
         ha-icon-button {
@@ -1409,20 +1445,49 @@ class DimsomePanel extends HTMLElement {
         }
 
         /* ── Settings rows ───────────────────────────────────────────── */
-        /* ha-settings-row owns its internal grid; we only manage rhythm
-           and the divider between consecutive rows. */
         .settings-list {
           margin-top: 8px;
         }
 
-        ha-settings-row {
-          --paper-item-body-two-line-min-height: 0;
+        .setting-row {
+          align-items: center;
           border-top: 1px solid var(--divider-color);
-          padding: 4px 0;
+          display: grid;
+          gap: 16px;
+          grid-template-columns: minmax(0, 1fr) minmax(140px, 240px);
+          padding: 8px 0;
         }
 
-        ha-settings-row:first-child {
+        .setting-row:first-child {
           border-top: none;
+        }
+
+        .setting-copy {
+          display: grid;
+          gap: 2px;
+          min-width: 0;
+        }
+
+        .setting-heading {
+          color: var(--primary-text-color);
+          font-size: 1rem;
+          line-height: 1.25;
+        }
+
+        .setting-description {
+          color: var(--secondary-text-color);
+          font-size: 0.875rem;
+          line-height: 1.35;
+        }
+
+        .setting-control {
+          min-width: 0;
+        }
+
+        .setting-control > ha-switch {
+          display: block;
+          margin-left: auto;
+          width: max-content;
         }
 
         /* ── Layout ──────────────────────────────────────────────────── */
@@ -1813,6 +1878,15 @@ class DimsomePanel extends HTMLElement {
           .field-grid.compact,
           .two-col {
             grid-template-columns: 1fr;
+          }
+
+          .setting-row {
+            align-items: start;
+            grid-template-columns: 1fr;
+          }
+
+          .setting-control > ha-switch {
+            margin-left: 0;
           }
 
           .section-head {
