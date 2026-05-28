@@ -92,6 +92,9 @@ def civil_event_time(
         if not crosses:
             previous = sample
             continue
+        if prev_delta == 0 and next_delta == 0:
+            previous = sample
+            continue
         rising = sample.elevation > previous.elevation
         if event is SunEvent.CIVIL_DAWN and not rising:
             previous = sample
