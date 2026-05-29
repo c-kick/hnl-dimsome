@@ -78,8 +78,16 @@ def split_turn_on_service_data(
 def civil_event_time(
     samples: list[SunElevationSample], event: SunEvent
 ) -> datetime | None:
-    """Estimate civil dawn/dusk from sun.sun elevation samples."""
+    """Estimate civil dawn/dusk from sun.sun elevation samples.
+
+    For CIVIL_DAWN returns the first rising crossing; for CIVIL_DUSK returns
+    the last falling crossing.  Using the last crossing for dusk means a
+    spurious falling edge produced by the CIVIL_ELEVATION event marker
+    landing after a real just-above-civil sample at dawn is harmlessly
+    superseded by the correct crossing later in the day.
+    """
     previous: SunElevationSample | None = None
+    result: datetime | None = None
     for sample in samples:
         if previous is None:
             previous = sample
@@ -103,12 +111,17 @@ def civil_event_time(
             previous = sample
             continue
         if isclose(sample.elevation, previous.elevation):
-            return sample.at
-        ratio = (CIVIL_ELEVATION - previous.elevation) / (
-            sample.elevation - previous.elevation
-        )
-        return previous.at + (sample.at - previous.at) * ratio
-    return None
+            t = sample.at
+        else:
+            ratio = (CIVIL_ELEVATION - previous.elevation) / (
+                sample.elevation - previous.elevation
+            )
+            t = previous.at + (sample.at - previous.at) * ratio
+        if event is SunEvent.CIVIL_DAWN:
+            return t
+        result = t
+        previous = sample
+    return result
 
 
 def reconstructed_civil_samples(
