@@ -534,13 +534,8 @@ class DimsomePanel extends HTMLElement {
       selector.value = selector.dataset.value || "";
     });
 
-    // Native <select> elements drive themselves via the `selected` option
-    // attribute, so they need no hydration.
-
-    // Text fields
-    root.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
-      field.value = field.dataset.value;
-    });
+    // Native <select> and <input> elements carry their values as plain HTML
+    // attributes, so they need no hydration.
 
     // Switches
     root.querySelectorAll("ha-switch").forEach((control) => {
@@ -854,17 +849,19 @@ class DimsomePanel extends HTMLElement {
           </div>
           <div class="settings-list">
             ${this._renderSetting("Ramp Duration", "How long each brightness transition should take.", `
-              <ha-textfield
-                label="Minutes"
-                type="number"
-                min="1"
-                max="720"
-                inputmode="numeric"
-                suffix="min"
-                data-value="${durationToMinutes(global.ramp_duration)}"
-                data-path="global.ramp_duration"
-                data-duration="minutes"
-              ></ha-textfield>
+              <div class="number-input-wrap" data-suffix="min">
+                <input
+                  class="native-number"
+                  aria-label="Ramp Duration Minutes"
+                  type="number"
+                  min="1"
+                  max="720"
+                  inputmode="numeric"
+                  value="${durationToMinutes(global.ramp_duration)}"
+                  data-path="global.ramp_duration"
+                  data-duration="minutes"
+                >
+              </div>
             `)}
             ${this._renderSetting("Override Resume", "Choose how manual changes return to Dimsome control.", selectHtml({
               path: "global.override_resume_mode",
@@ -872,17 +869,19 @@ class DimsomePanel extends HTMLElement {
               options: RESUME_MODES,
             }))}
             ${this._renderSetting("Grace Period", "Delay before automatic resume after a manual change.", `
-              <ha-textfield
-                label="Minutes"
-                type="number"
-                min="1"
-                max="720"
-                inputmode="numeric"
-                suffix="min"
-                data-value="${durationToMinutes(global.override_grace_period, 15)}"
-                data-path="global.override_grace_period"
-                data-duration="minutes"
-              ></ha-textfield>
+              <div class="number-input-wrap" data-suffix="min">
+                <input
+                  class="native-number"
+                  aria-label="Grace Period Minutes"
+                  type="number"
+                  min="1"
+                  max="720"
+                  inputmode="numeric"
+                  value="${durationToMinutes(global.override_grace_period, 15)}"
+                  data-path="global.override_grace_period"
+                  data-duration="minutes"
+                >
+              </div>
             `)}
             ${this._renderSetting("Split Brightness & Color Calls", "Enable by default for lights that reject combined brightness/color updates.", `
               <ha-switch
@@ -899,12 +898,15 @@ class DimsomePanel extends HTMLElement {
               ></ha-switch>
             `)}
             ${this._renderSetting("Native Users", "Comma-separated HA user IDs (e.g. the Node-RED token user) whose light changes are treated like automations instead of manual overrides.", `
-              <ha-textfield
-                label="User IDs"
-                data-value="${escapeHtml((global.native_user_ids || []).join(", "))}"
+              <input
+                class="native-text"
+                aria-label="Native user IDs"
+                type="text"
+                placeholder="user id, user id, …"
+                value="${escapeHtml((global.native_user_ids || []).join(", "))}"
                 data-path="global.native_user_ids"
                 data-list="csv"
-              ></ha-textfield>
+              >
             `)}
           </div>
         </div>
@@ -968,28 +970,34 @@ class DimsomePanel extends HTMLElement {
               ></ha-entity-picker>
             `)}
             ${this._renderField("Minimum Brightness", `
-              <ha-textfield
-                type="number"
-                min="1"
-                max="100"
-                inputmode="numeric"
-                suffix="%"
-                data-value="${light.min_brightness_pct ?? 10}"
-                data-number="int"
-                data-path="lights.${index}.min_brightness_pct"
-              ></ha-textfield>
+              <div class="number-input-wrap" data-suffix="%">
+                <input
+                  class="native-number"
+                  aria-label="Minimum Brightness"
+                  type="number"
+                  min="1"
+                  max="100"
+                  inputmode="numeric"
+                  value="${light.min_brightness_pct ?? 10}"
+                  data-number="int"
+                  data-path="lights.${index}.min_brightness_pct"
+                >
+              </div>
             `)}
             ${this._renderField("Maximum Brightness", `
-              <ha-textfield
-                type="number"
-                min="1"
-                max="100"
-                inputmode="numeric"
-                suffix="%"
-                data-value="${light.max_brightness_pct ?? 80}"
-                data-number="int"
-                data-path="lights.${index}.max_brightness_pct"
-              ></ha-textfield>
+              <div class="number-input-wrap" data-suffix="%">
+                <input
+                  class="native-number"
+                  aria-label="Maximum Brightness"
+                  type="number"
+                  min="1"
+                  max="100"
+                  inputmode="numeric"
+                  value="${light.max_brightness_pct ?? 80}"
+                  data-number="int"
+                  data-path="lights.${index}.max_brightness_pct"
+                >
+              </div>
             `)}
           </div>
           <ha-expansion-panel
@@ -1040,30 +1048,36 @@ class DimsomePanel extends HTMLElement {
           ${hasColor ? `
             <div class="field-grid top-gap">
               ${this._renderField("Minimum Brightness Color Temperature", `
-                <ha-textfield
-                  type="number"
-                  min="1000"
-                  max="12000"
-                  step="50"
-                  inputmode="numeric"
-                  suffix="K"
-                  data-value="${light.min_color?.value ?? 2200}"
-                  data-number="int"
-                  data-path="lights.${index}.min_color.value"
-                ></ha-textfield>
+                <div class="number-input-wrap" data-suffix="K">
+                  <input
+                    class="native-number"
+                    aria-label="Minimum Brightness Color Temperature"
+                    type="number"
+                    min="1000"
+                    max="12000"
+                    step="50"
+                    inputmode="numeric"
+                    value="${light.min_color?.value ?? 2200}"
+                    data-number="int"
+                    data-path="lights.${index}.min_color.value"
+                  >
+                </div>
               `)}
               ${this._renderField("Maximum Brightness Color Temperature", `
-                <ha-textfield
-                  type="number"
-                  min="1000"
-                  max="12000"
-                  step="50"
-                  inputmode="numeric"
-                  suffix="K"
-                  data-value="${light.max_color?.value ?? 4000}"
-                  data-number="int"
-                  data-path="lights.${index}.max_color.value"
-                ></ha-textfield>
+                <div class="number-input-wrap" data-suffix="K">
+                  <input
+                    class="native-number"
+                    aria-label="Maximum Brightness Color Temperature"
+                    type="number"
+                    min="1000"
+                    max="12000"
+                    step="50"
+                    inputmode="numeric"
+                    value="${light.max_color?.value ?? 4000}"
+                    data-number="int"
+                    data-path="lights.${index}.max_color.value"
+                  >
+                </div>
               `)}
             </div>
           ` : ""}
@@ -1092,33 +1106,41 @@ class DimsomePanel extends HTMLElement {
                 ${this._renderSchedule("Brightening Override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
               </div>
               <div class="field-grid top-gap">
-                <ha-textfield
-                  label="Ramp Duration"
-                  type="number"
-                  min="1"
-                  max="720"
-                  inputmode="numeric"
-                  suffix="min"
-                  data-value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
-                  data-path="lights.${index}.ramp_duration"
-                  data-duration="minutes"
-                ></ha-textfield>
+                ${this._renderField("Ramp Duration", `
+                  <div class="number-input-wrap" data-suffix="min">
+                    <input
+                      class="native-number"
+                      aria-label="Ramp Duration Minutes"
+                      type="number"
+                      min="1"
+                      max="720"
+                      inputmode="numeric"
+                      value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
+                      data-path="lights.${index}.ramp_duration"
+                      data-duration="minutes"
+                    >
+                  </div>
+                `)}
                 ${this._renderField("Override Resume", selectHtml({
                   path: `lights.${index}.override_resume_mode`,
                   value: light.override_resume_mode || this._config.global.override_resume_mode || "manual_only",
                   options: RESUME_MODES,
                 }))}
-                <ha-textfield
-                  label="Grace Period"
-                  type="number"
-                  min="1"
-                  max="720"
-                  inputmode="numeric"
-                  suffix="min"
-                  data-value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
-                  data-path="lights.${index}.override_grace_period"
-                  data-duration="minutes"
-                ></ha-textfield>
+                ${this._renderField("Grace Period", `
+                  <div class="number-input-wrap" data-suffix="min">
+                    <input
+                      class="native-number"
+                      aria-label="Grace Period Minutes"
+                      type="number"
+                      min="1"
+                      max="720"
+                      inputmode="numeric"
+                      value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
+                      data-path="lights.${index}.override_grace_period"
+                      data-duration="minutes"
+                    >
+                  </div>
+                `)}
               </div>
             </div>
           ` : ""}
@@ -1172,28 +1194,36 @@ class DimsomePanel extends HTMLElement {
             autofocus
           ></ha-entity-picker>
           <div class="dialog-row">
-            <ha-textfield
-              label="Min Brightness"
-              type="number"
-              min="1"
-              max="100"
-              inputmode="numeric"
-              suffix="%"
-              data-value="${this._addDraft.min_brightness_pct ?? 10}"
-              data-draft-path="min_brightness_pct"
-              data-number="int"
-            ></ha-textfield>
-            <ha-textfield
-              label="Max Brightness"
-              type="number"
-              min="1"
-              max="100"
-              inputmode="numeric"
-              suffix="%"
-              data-value="${this._addDraft.max_brightness_pct ?? 80}"
-              data-draft-path="max_brightness_pct"
-              data-number="int"
-            ></ha-textfield>
+            ${this._renderField("Min Brightness", `
+              <div class="number-input-wrap" data-suffix="%">
+                <input
+                  class="native-number"
+                  aria-label="Min Brightness"
+                  type="number"
+                  min="1"
+                  max="100"
+                  inputmode="numeric"
+                  value="${this._addDraft.min_brightness_pct ?? 10}"
+                  data-draft-path="min_brightness_pct"
+                  data-number="int"
+                >
+              </div>
+            `)}
+            ${this._renderField("Max Brightness", `
+              <div class="number-input-wrap" data-suffix="%">
+                <input
+                  class="native-number"
+                  aria-label="Max Brightness"
+                  type="number"
+                  min="1"
+                  max="100"
+                  inputmode="numeric"
+                  value="${this._addDraft.max_brightness_pct ?? 80}"
+                  data-draft-path="max_brightness_pct"
+                  data-number="int"
+                >
+              </div>
+            `)}
           </div>
           <div class="dialog-actions">
             <ha-button data-action="cancel-add">Cancel</ha-button>
@@ -1352,7 +1382,6 @@ class DimsomePanel extends HTMLElement {
           display: block;
         }
 
-        ha-textfield,
         ha-selector,
         ha-entity-picker {
           width: 100%;
@@ -1429,7 +1458,8 @@ class DimsomePanel extends HTMLElement {
           transform: translateY(-50%);
         }
 
-        .native-number {
+        .native-number,
+        .native-text {
           background-color: var(--card-background-color, var(--primary-background-color));
           border: 1px solid var(--divider-color);
           border-radius: 4px;
@@ -1444,11 +1474,21 @@ class DimsomePanel extends HTMLElement {
           width: 100%;
         }
 
-        .native-number:hover {
+        .native-text {
+          padding-right: 12px;
+        }
+
+        .native-text::placeholder {
+          color: var(--disabled-text-color);
+        }
+
+        .native-number:hover,
+        .native-text:hover {
           border-color: var(--secondary-text-color);
         }
 
-        .native-number:focus {
+        .native-number:focus,
+        .native-text:focus {
           border-color: var(--primary-color);
           box-shadow: 0 0 0 1px var(--primary-color);
           outline: none;
