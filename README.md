@@ -66,9 +66,7 @@ Outside active ramps, Dimsome applies the correct plateau target when a controll
 
 If a light is manually changed during an active ramp, Dimsome stands down for that light for the rest of that ramp. Use the resume button or `dimsome.resume` service to hand control back sooner.
 
-Civil dawn and dusk are anchored from Home Assistant's `sun.sun` state and next-event attributes. Dimsome stores the next civil dawn and dusk times in its own runtime cache, persists that cache across restarts, and keeps using a stored anchor through the end of its ramp. This avoids depending on Home Assistant's rolling `next_dawn` and `next_dusk` values during an active dawn or dusk ramp.
-
-If Dimsome starts without a stored anchor, it reconstructs the current phase from `sun.sun` elevation and next-event attributes. Once a valid next dawn or dusk is seen, Dimsome stores it for subsequent ticks and restarts.
+Civil dawn and dusk come directly from Home Assistant's astral data (`get_astral_event_date`), which is deterministic for any calendar date. Dimsome simply asks for the civil dawn/dusk of the days around "now" whenever it needs a ramp start time. There is no elevation sampling, crossing reconstruction, or anchor cache: the same query works identically on a fresh start, after a restart, or across midnight, so a dusk ramp always begins at civil dusk and ramps down rather than snapping to the night target.
 
 ## Configuration
 
@@ -82,6 +80,7 @@ Global defaults include:
 - manual override resume mode
 - override grace period
 - split turn-on calls
+- native user IDs: Home Assistant user IDs whose light changes are treated like automations instead of manual overrides (useful for Node-RED or other token-based integrations that drive lights)
 
 Each light includes:
 
@@ -141,6 +140,8 @@ dimsome:
     override_resume_mode: manual_only
     override_grace_period: "00:15:00"
     split_turn_on_calls: false
+    native_user_ids:
+      - "abcdef0123456789abcdef0123456789"  # e.g. the Node-RED user
   lights:
     - entity_id: light.living_room
       enabled: true

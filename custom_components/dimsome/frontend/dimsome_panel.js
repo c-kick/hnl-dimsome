@@ -7,6 +7,7 @@ const DEFAULT_CONFIG = {
     override_grace_period: "00:15:00",
     split_turn_on_calls: false,
     apply_on_recovered_on: true,
+    native_user_ids: [],
   },
   lights: [],
 };
@@ -272,7 +273,10 @@ class DimsomePanel extends HTMLElement {
   }
 
   connectedCallback() {
-    this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
+    if (!this._clickBound) {
+      this._clickBound = true;
+      this.shadowRoot.addEventListener("click", (event) => this._handleClick(event));
+    }
     this._render();
     this._tickHandle = window.setInterval(() => this._refreshLiveBits(), 60_000);
   }
@@ -351,7 +355,10 @@ class DimsomePanel extends HTMLElement {
     const fresh = wrapper.firstElementChild;
     if (fresh) {
       hero.replaceWith(fresh);
-      this._hydrateNativeComponents();
+      // Hydrate only the replaced subtree: re-hydrating the whole shadow root
+      // would reset every input to its render-time value, visually undoing
+      // unsaved edits that are still pending in this._config.
+      this._hydrateNativeComponents(fresh);
     }
   }
 
@@ -384,6 +391,9 @@ class DimsomePanel extends HTMLElement {
       if (control.dataset.number === "int") value = Number(value);
       if (control.dataset.number === "float") value = Number(value);
       if (control.dataset.duration === "minutes") value = minutesToDuration(value);
+      if (control.dataset.list === "csv") {
+        value = String(value).split(",").map((part) => part.trim()).filter(Boolean);
+      }
       setPath(this._config, control.dataset.path, value);
       this._normalizeScheduleForPath(control.dataset.path);
       if (control.dataset.renderOnChange || control.dataset.path.endsWith(".type")) this._render();
@@ -484,18 +494,18 @@ class DimsomePanel extends HTMLElement {
     this._render();
   }
 
-  _hydrateNativeComponents() {
-    if (!this.shadowRoot) return;
+  _hydrateNativeComponents(root = this.shadowRoot) {
+    if (!root) return;
 
     // Menu button — native sidebar toggle for narrow screens
-    const menuBtn = this.shadowRoot.querySelector("ha-menu-button");
+    const menuBtn = root.querySelector("ha-menu-button");
     if (menuBtn) {
       menuBtn.hass = this._hass;
       menuBtn.narrow = this._narrow;
     }
 
     // Icon button SVG paths
-    this.shadowRoot.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
+    root.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
       const action = btn.dataset.action;
       if (action === "reload") btn.path = MDI_REFRESH;
       if (action === "resume") btn.path = MDI_PLAY_CIRCLE;
@@ -505,20 +515,20 @@ class DimsomePanel extends HTMLElement {
     });
 
     // Entity pickers
-    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((picker) => {
+    root.querySelectorAll("ha-entity-picker").forEach((picker) => {
       picker.hass = this._hass;
       picker.includeDomains = ["light"];
       picker.value = picker.dataset.value || "";
     });
 
     // State icons
-    this.shadowRoot.querySelectorAll("ha-state-icon").forEach((icon) => {
+    root.querySelectorAll("ha-state-icon").forEach((icon) => {
       icon.hass = this._hass;
       icon.stateObj = this._hass?.states?.[icon.dataset.entityId];
     });
 
     // Time selectors
-    this.shadowRoot.querySelectorAll("ha-selector[data-selector='time']").forEach((selector) => {
+    root.querySelectorAll("ha-selector[data-selector='time']").forEach((selector) => {
       selector.hass = this._hass;
       selector.selector = { time: {} };
       selector.value = selector.dataset.value || "";
@@ -528,17 +538,17 @@ class DimsomePanel extends HTMLElement {
     // attribute, so they need no hydration.
 
     // Text fields
-    this.shadowRoot.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
+    root.querySelectorAll("ha-textfield[data-value]").forEach((field) => {
       field.value = field.dataset.value;
     });
 
     // Switches
-    this.shadowRoot.querySelectorAll("ha-switch").forEach((control) => {
+    root.querySelectorAll("ha-switch").forEach((control) => {
       control.checked = control.hasAttribute("checked");
     });
 
     // Dialog lifecycle — handles ESC / scrim / programmatic close.
-    const dialog = this.shadowRoot.querySelector("ha-dialog");
+    const dialog = root.querySelector("ha-dialog");
     if (dialog && !dialog._dimsomeBound) {
       dialog._dimsomeBound = true;
       dialog.addEventListener("closed", () => {
@@ -547,7 +557,7 @@ class DimsomePanel extends HTMLElement {
     }
 
     // Bind all data controls
-    this.shadowRoot
+    root
       .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle]")
       .forEach((control) => this._bindControl(control));
 
@@ -564,6 +574,8 @@ class DimsomePanel extends HTMLElement {
   }
 
   _bindControl(control) {
+    if (control._dimsomeBound) return;
+    control._dimsomeBound = true;
     const handler = (event) => this._handleControlInput(control, event);
     if (control.localName === "ha-switch") {
       control.addEventListener("change", handler);
@@ -885,6 +897,14 @@ class DimsomePanel extends HTMLElement {
                 ${(global.apply_on_recovered_on ?? true) ? "checked" : ""}
                 data-path="global.apply_on_recovered_on"
               ></ha-switch>
+            `)}
+            ${this._renderSetting("Native Users", "Comma-separated HA user IDs (e.g. the Node-RED token user) whose light changes are treated like automations instead of manual overrides.", `
+              <ha-textfield
+                label="User IDs"
+                data-value="${escapeHtml((global.native_user_ids || []).join(", "))}"
+                data-path="global.native_user_ids"
+                data-list="csv"
+              ></ha-textfield>
             `)}
           </div>
         </div>

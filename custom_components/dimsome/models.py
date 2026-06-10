@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -14,6 +14,7 @@ from .const import (
     CONF_ENABLED,
     CONF_GLOBAL,
     CONF_LIGHTS,
+    CONF_NATIVE_USER_IDS,
     CONF_MAX_BRIGHTNESS_PCT,
     CONF_MAX_COLOR,
     CONF_MIN_BRIGHTNESS_PCT,
@@ -132,6 +133,16 @@ class LightRuntime:
     last_decision_at: datetime | None = None
 
 
+def parse_time(value: str) -> time:
+    """Parse HH:MM or HH:MM:SS."""
+    parts = [int(part) for part in value.split(":")]
+    if len(parts) == 2:
+        return time(parts[0], parts[1])
+    if len(parts) == 3:
+        return time(parts[0], parts[1], parts[2])
+    raise ValueError(f"Invalid time: {value}")
+
+
 def parse_duration(value: Any, default: timedelta | None = None) -> timedelta | None:
     """Parse a duration from seconds, HH:MM:SS, or an existing timedelta."""
     if value is None:
@@ -175,8 +186,14 @@ def parse_schedule(value: Any) -> ScheduleConfig:
     schedule_type = ScheduleType(value.get("type"))
     if schedule_type is ScheduleType.FIXED_TIME:
         at = value.get("at")
-        if not isinstance(at, str) or len(at.split(":")) not in (2, 3):
+        if not isinstance(at, str):
             raise ValueError("Fixed schedule requires at: HH:MM or HH:MM:SS")
+        try:
+            parse_time(at)
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Invalid fixed schedule time {at!r}: must be HH:MM or HH:MM:SS"
+            ) from err
         return ScheduleConfig(type=schedule_type, at=at)
     event = SunEvent(value.get("event"))
     return ScheduleConfig(type=schedule_type, event=event)
@@ -189,8 +206,20 @@ def _require_brightness(value: Any, name: str) -> int:
     return brightness
 
 
+def resolve_native_user_ids(config: dict[str, Any]) -> frozenset[str]:
+    """Resolve HA user ids whose light changes count as automations, not manual."""
+    raw = config.get(CONF_GLOBAL, {}).get(CONF_NATIVE_USER_IDS, [])
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError("native_user_ids must be a list of user id strings")
+    return frozenset(item.strip() for item in raw if item.strip())
+
+
 def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
     """Resolve global defaults and per-light overrides into immutable configs."""
+    # Validates the global allowlist too, so config-save rejects bad values.
+    resolve_native_user_ids(config)
     global_config = config.get(CONF_GLOBAL, {})
     light_configs = config.get(CONF_LIGHTS, [])
     if not isinstance(light_configs, list) or not light_configs:
@@ -220,11 +249,15 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
             timedelta(minutes=60),
         )
         assert ramp_duration is not None
+        if ramp_duration <= timedelta(0):
+            raise ValueError("ramp_duration must be positive")
         settle_delay = parse_duration(
             light.get(CONF_SETTLE_DELAY),
             timedelta(milliseconds=500),
         )
         assert settle_delay is not None
+        if settle_delay < timedelta(0):
+            raise ValueError("settle_delay must not be negative")
 
         grace_period = parse_duration(
             light.get(
@@ -232,6 +265,8 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                 global_config.get(CONF_OVERRIDE_GRACE_PERIOD),
             )
         )
+        if grace_period is not None and grace_period <= timedelta(0):
+            raise ValueError("override_grace_period must be positive")
         resume_mode = OverrideResumeMode(
             light.get(
                 CONF_OVERRIDE_RESUME_MODE,

@@ -3,11 +3,14 @@
   "name": "Dimsome",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["frontend", "http"],
+  "dependencies": [
+    "frontend",
+    "http"
+  ],
   "documentation": "https://github.com/c-kick/hnl-dimsome",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/c-kick/hnl-dimsome/issues",
   "single_config_entry": true,
-  "version": "0.1.0"
+  "version": "0.3.0"
 }

@@ -84,6 +84,7 @@ async def ws_config(hass: HomeAssistant, connection, msg) -> None:
     )
 
 
+@websocket_api.require_admin
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/save_config",

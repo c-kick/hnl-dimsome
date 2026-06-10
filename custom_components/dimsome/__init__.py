@@ -45,13 +45,12 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> bool:
     """Set up Dimsome from a config entry."""
     from .coordinator import DimsomeController
-    from .engine import restore_civil_event_cache
-    from .models import resolve_light_configs
-    from homeassistant.helpers.storage import Store
+    from .models import resolve_light_configs, resolve_native_user_ids
 
     raw_config = {**entry.data, **entry.options}
     try:
         light_configs = resolve_light_configs(raw_config)
+        native_user_ids = resolve_native_user_ids(raw_config)
     except (KeyError, TypeError, ValueError) as err:
         _LOGGER.error("Invalid Dimsome configuration: %s", err)
         return False
@@ -72,28 +71,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
         )
         return False
 
-    civil_event_store = Store(
-        hass, 1, f"{DOMAIN}_{entry.entry_id}_civil_event_cache"
-    )
-    civil_event_cache = restore_civil_event_cache(
-        await civil_event_store.async_load()
-    )
-
-    def _save_civil_event_cache(data: dict[str, str]) -> None:
-        civil_event_store.async_delay_save(lambda: data, 1)
-
     controller = DimsomeController(
         hass,
         entry.entry_id,
         light_configs,
-        civil_event_cache=civil_event_cache,
-        civil_event_cache_save=_save_civil_event_cache,
+        native_user_ids=native_user_ids,
     )
     entry.runtime_data = controller
     await controller.async_start()
     _migrate_per_light_entities(hass, entry.entry_id, controller.lights)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    # No update listener on purpose: the only config writers (panel save and
+    # the enable switch) reload explicitly or update the running controller
+    # in place. A listener here would double-reload on every save.
     return True
 
 
@@ -104,13 +94,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> 
         return False
     await entry.runtime_data.async_stop()
     return True
-
-
-async def _async_update_listener(
-    hass: HomeAssistant, entry: DimsomeConfigEntry
-) -> None:
-    """Reload Dimsome when options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 def _migrate_per_light_entities(

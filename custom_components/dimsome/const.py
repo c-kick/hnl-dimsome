@@ -1,7 +1,7 @@
 """Constants for the Dimsome integration."""
 
 DOMAIN = "dimsome"
-VERSION = "0.2.9"
+VERSION = "0.3.0"
 PLATFORMS = ["button", "sensor", "switch"]
 
 SERVICE_RESUME = "resume"
@@ -22,3 +22,4 @@ CONF_OVERRIDE_GRACE_PERIOD = "override_grace_period"
 CONF_SPLIT_TURN_ON_CALLS = "split_turn_on_calls"
 CONF_APPLY_ON_RECOVERED_ON = "apply_on_recovered_on"
 CONF_SETTLE_DELAY = "settle_delay"
+CONF_NATIVE_USER_IDS = "native_user_ids"

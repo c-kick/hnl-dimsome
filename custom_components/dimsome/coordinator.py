@@ -1,4 +1,10 @@
-"""Home Assistant runtime controller for Dimsome."""
+"""Home Assistant runtime controller for Dimsome.
+
+Civil dawn and dusk come straight from Home Assistant's astral helpers, which
+are deterministic for any calendar date.  There is no sun-elevation sampling,
+no crossing reconstruction, and no anchor cache: the controller just asks
+``get_astral_event_date`` when it needs a ramp start time.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Collection
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -22,27 +28,21 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
     async_track_time_interval,
 )
+from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SERVICE_RESUME
 from .engine import (
-    CIVIL_ELEVATION,
-    SunElevationSample,
     active_window,
     brightness_pct_to_ha,
-    civil_event_cache_samples,
     next_window_start,
-    reconstructed_civil_samples,
     should_clear_manual_override_for_window,
     should_ignore_state_change,
     should_skip_for_manual_override,
     should_stand_down_for_context,
     split_turn_on_service_data,
-    serialize_civil_event_cache,
     target_matches_state,
     target_for_now,
-    upcoming_civil_samples,
-    update_civil_event_cache,
 )
 from .models import (
     ColorMode,
@@ -51,24 +51,22 @@ from .models import (
     OverrideResumeMode,
     RampWindow,
     ResolvedLightConfig,
-    ScheduleType,
-    SequenceKind,
     SunEvent,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 RAMP_INTERVAL = timedelta(seconds=15)
-SUN_REFRESH_INTERVAL = timedelta(minutes=5)
+REFRESH_INTERVAL = timedelta(minutes=5)
 IGNORE_UPDATE_WINDOW = timedelta(seconds=10)
-SUN_ENTITY_ID = "sun.sun"
-SUN_ATTR_NEXT_DAWN = "next_dawn"
-SUN_ATTR_NEXT_DUSK = "next_dusk"
 RESUME_SERVICE_SCHEMA = vol.Schema({vol.Optional(ATTR_ENTITY_ID): cv.entity_ids})
 AUTOMATION_TRIGGERED_EVENT = "automation_triggered"
 SCRIPT_STARTED_EVENT = "script_started"
 MAX_AUTOMATION_CONTEXTS = 128
 SPLIT_TURN_ON_DELAY = 1.0
+
+#: Map Dimsome civil events to Home Assistant astral event names.
+_ASTRAL_EVENT = {SunEvent.CIVIL_DAWN: "dawn", SunEvent.CIVIL_DUSK: "dusk"}
 
 
 class DimsomeController:
@@ -79,8 +77,7 @@ class DimsomeController:
         hass: HomeAssistant,
         entry_id: str,
         light_configs: list[ResolvedLightConfig],
-        civil_event_cache: dict[SunEvent, datetime] | None = None,
-        civil_event_cache_save: Any | None = None,
+        native_user_ids: frozenset[str] = frozenset(),
     ) -> None:
         """Initialize the controller."""
         self.hass = hass
@@ -88,14 +85,17 @@ class DimsomeController:
         self.lights = {
             config.entity_id: LightRuntime(config=config) for config in light_configs
         }
+        self._native_user_ids = native_user_ids
         self._unsubs: list[Any] = []
         self._ramp_unsub: Any | None = None
         self._wake_unsub: Any | None = None
-        self._sun_refresh_unsub: Any | None = None
-        self._sun_samples: list[SunElevationSample] = []
-        self._civil_event_cache = civil_event_cache or {}
-        self._civil_event_cache_save = civil_event_cache_save
+        self._refresh_unsub: Any | None = None
         self._automation_context_ids: list[str] = []
+        self._turn_on_tasks: set[asyncio.Task] = set()
+
+    def _civil_lookup(self, event: SunEvent, day: date) -> datetime | None:
+        """Resolve a civil sun event on a calendar date via HA's astral data."""
+        return get_astral_event_date(self.hass, _ASTRAL_EVENT[event], day)
 
     async def async_start(self) -> None:
         """Start listeners and reconstruct current phase."""
@@ -116,19 +116,9 @@ class DimsomeController:
                 SCRIPT_STARTED_EVENT, self._async_automation_or_script_started
             )
         )
-        if any(
-            uses_civil_schedule(runtime.config) for runtime in self.lights.values()
-        ):
-            self._unsubs.append(
-                async_track_state_change_event(
-                    self.hass, [SUN_ENTITY_ID], self._async_sun_changed
-                )
-            )
-            self._sun_refresh_unsub = async_track_time_interval(
-                self.hass, self.async_tick, SUN_REFRESH_INTERVAL
-            )
-            self._record_sun_sample(self.hass.states.get(SUN_ENTITY_ID))
-
+        self._refresh_unsub = async_track_time_interval(
+            self.hass, self.async_tick, REFRESH_INTERVAL
+        )
         await self.async_tick()
 
     async def async_stop(self) -> None:
@@ -139,13 +129,16 @@ class DimsomeController:
         if self._wake_unsub is not None:
             self._wake_unsub()
             self._wake_unsub = None
-        if self._sun_refresh_unsub is not None:
-            self._sun_refresh_unsub()
-            self._sun_refresh_unsub = None
+        if self._refresh_unsub is not None:
+            self._refresh_unsub()
+            self._refresh_unsub = None
         for runtime in self.lights.values():
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
                 runtime.grace_unsub = None
+        for task in self._turn_on_tasks:
+            task.cancel()
+        self._turn_on_tasks.clear()
         while self._unsubs:
             self._unsubs.pop()()
 
@@ -199,22 +192,16 @@ class DimsomeController:
         self, runtime: LightRuntime, now: datetime
     ) -> dict[str, Any]:
         """Return diagnostic runtime state for one light."""
-        window = active_window(runtime.config, now, self._sun_samples)
-        target = target_for_now(runtime.config, now, self._sun_samples)
+        window = active_window(runtime.config, now, self._civil_lookup)
+        target = target_for_now(runtime.config, now, self._civil_lookup)
         return {
             "enabled": runtime.config.enabled,
             "status": self._status_for_runtime(runtime, window),
             "stood_down": runtime.stood_down,
             "stood_down_window": _window_status(runtime.stood_down_window),
             "active_window": _window_status(window),
-            "civil_event_cache": {
-                event.value: _datetime_status(at)
-                for event, at in sorted(
-                    self._civil_event_cache.items(), key=lambda item: item[0].value
-                )
-            },
             "next_window_start": _datetime_status(
-                next_window_start(runtime.config, now, self._sun_samples)
+                next_window_start(runtime.config, now, self._civil_lookup)
             ),
             "target": _target_status(target),
             "last_target": _target_status(runtime.last_target),
@@ -243,8 +230,6 @@ class DimsomeController:
     async def async_tick(self, *_: Any) -> None:
         """Apply current targets and manage the active ramp timer."""
         now = dt_util.now()
-        if any(uses_civil_schedule(runtime.config) for runtime in self.lights.values()):
-            self._record_sun_sample(self.hass.states.get(SUN_ENTITY_ID))
         any_active = False
         next_start = None
         for runtime in self.lights.values():
@@ -253,7 +238,7 @@ class DimsomeController:
                 self._record_decision(runtime, "disabled", now)
                 continue
             state = self.hass.states.get(runtime.config.entity_id)
-            window = active_window(runtime.config, now, self._sun_samples)
+            window = active_window(runtime.config, now, self._civil_lookup)
             if should_clear_manual_override_for_window(
                 stood_down=runtime.stood_down,
                 stood_down_window=runtime.stood_down_window,
@@ -264,35 +249,12 @@ class DimsomeController:
                 _LOGGER.debug(
                     "Resuming %s for new ramp window", runtime.config.entity_id
                 )
-            candidate_start = next_window_start(runtime.config, now, self._sun_samples)
+            candidate_start = next_window_start(runtime.config, now, self._civil_lookup)
             if candidate_start is not None and (
                 next_start is None or candidate_start < next_start
             ):
                 next_start = candidate_start
-            target = target_for_now(runtime.config, now, self._sun_samples)
-            if window is None and target is not None:
-                from .engine import (
-                    candidate_windows as _cw,
-                    is_civil_night as _icn,
-                    latest_sun_elevation as _lse,
-                )
-                elevation = _lse(now, self._sun_samples)
-                civil_night = _icn(now, self._sun_samples)
-                all_windows = _cw(runtime.config, now, self._sun_samples)
-                if civil_night or any(
-                    abs((w.start - now).total_seconds()) < 7200 for w in all_windows
-                ):
-                    _LOGGER.warning(
-                        "DIAG %s now=%s elev=%.2f civil_night=%s window=None target=%s "
-                        "all_windows=%s samples=%d",
-                        runtime.config.entity_id,
-                        now.isoformat(),
-                        elevation if elevation is not None else -99.0,
-                        civil_night,
-                        target,
-                        [(w.sequence, w.start.isoformat(), w.end.isoformat()) for w in all_windows],
-                        len(self._sun_samples),
-                    )
+            target = target_for_now(runtime.config, now, self._civil_lookup)
             if target is None:
                 runtime.last_target = None
                 self._record_decision(runtime, "no_target", now)
@@ -375,14 +337,14 @@ class DimsomeController:
             runtime.stood_down = False
             runtime.stood_down_window = None
             runtime.last_target = None
-            self.hass.async_create_task(self._async_handle_turn_on(runtime))
+            self._create_turn_on_task(runtime)
             return
 
         if old_state is not None and old_state.state == STATE_OFF and new_state.state == STATE_ON:
             runtime.stood_down = False
             runtime.stood_down_window = None
             runtime.last_target = None
-            self.hass.async_create_task(self._async_handle_turn_on(runtime))
+            self._create_turn_on_task(runtime)
             return
 
         now = dt_util.now()
@@ -398,11 +360,13 @@ class DimsomeController:
         ):
             return
 
-        window = active_window(runtime.config, now, self._sun_samples)
+        window = active_window(runtime.config, now, self._civil_lookup)
         if window is None:
             return
         if not should_stand_down_for_context(
-            new_state.context, set(self._automation_context_ids)
+            new_state.context,
+            set(self._automation_context_ids),
+            self._native_user_ids,
         ):
             _LOGGER.debug("Ignoring automation-originated change for %s", entity_id)
             return
@@ -420,57 +384,38 @@ class DimsomeController:
         self._automation_context_ids.append(context_id)
         del self._automation_context_ids[:-MAX_AUTOMATION_CONTEXTS]
 
-    @callback
-    def _async_sun_changed(self, event: Event) -> None:
-        """Detect civil dawn/dusk by sun.sun elevation threshold crossing."""
-        old_state: State | None = event.data.get("old_state")
-        new_state: State | None = event.data.get("new_state")
-        self._record_sun_sample(new_state)
-        if old_state is None or new_state is None:
-            return
-        old_elevation = _state_elevation(old_state)
-        new_elevation = _state_elevation(new_state)
-        if old_elevation is None or new_elevation is None:
-            return
-        event_kind: SunEvent | None = None
-        if old_elevation < CIVIL_ELEVATION <= new_elevation:
-            event_kind = SunEvent.CIVIL_DAWN
-        elif old_elevation > CIVIL_ELEVATION >= new_elevation:
-            event_kind = SunEvent.CIVIL_DUSK
-        if event_kind is None:
-            return
-        now = dt_util.now()
-        self._sun_samples.append(SunElevationSample(now, CIVIL_ELEVATION))
-        for runtime in self.lights.values():
-            if schedule_uses_event(runtime.config, event_kind):
-                runtime.stood_down = False
-        self.hass.async_create_task(self.async_tick())
+    def _create_turn_on_task(self, runtime: LightRuntime) -> None:
+        """Run the turn-on handler in a task that stop() can cancel."""
+        task = self.hass.async_create_task(self._async_handle_turn_on(runtime))
+        self._turn_on_tasks.add(task)
+        task.add_done_callback(self._turn_on_tasks.discard)
 
     async def _async_handle_turn_on(self, runtime: LightRuntime) -> None:
         """Apply the current expected value when a light turns on."""
         if runtime.config.settle_delay > timedelta(0):
             await asyncio.sleep(runtime.config.settle_delay.total_seconds())
         now = dt_util.now()
-        target = target_for_now(runtime.config, now, self._sun_samples)
+        target = target_for_now(runtime.config, now, self._civil_lookup)
         if target is not None:
             await self._async_apply_target(runtime, target)
-            await self._async_verify_turn_on_target(runtime, target)
+            await self._async_verify_turn_on_target(runtime)
 
-    async def _async_verify_turn_on_target(
-        self, runtime: LightRuntime, target: LightTarget
-    ) -> None:
+    async def _async_verify_turn_on_target(self, runtime: LightRuntime) -> None:
         """Reapply turn-on targets that were lost to device restore timing."""
         await asyncio.sleep(IGNORE_UPDATE_WINDOW.total_seconds())
         now = dt_util.now()
-        if target_for_now(runtime.config, now, self._sun_samples) != target:
+        # Verify against the current target: during a ramp it has moved on
+        # since turn-on, and the moved-on value is what the light should show.
+        current = target_for_now(runtime.config, now, self._civil_lookup)
+        if current is None or runtime.stood_down:
             return
         state = self.hass.states.get(runtime.config.entity_id)
         if state is None or state.state != STATE_ON:
             return
-        if target_matches_state(target, state.attributes):
+        if target_matches_state(current, state.attributes):
             return
         runtime.last_target = None
-        await self._async_apply_target(runtime, target)
+        await self._async_apply_target(runtime, current)
 
     async def _async_apply_target(
         self, runtime: LightRuntime, target: LightTarget
@@ -549,35 +494,6 @@ class DimsomeController:
             self.hass, runtime.config.override_grace_period.total_seconds(), _resume
         )
 
-    def _record_sun_sample(self, state: State | None) -> None:
-        """Record bounded sun elevation samples."""
-        elevation = _state_elevation(state)
-        if elevation is None:
-            return
-        cache = getattr(self, "_civil_event_cache", None)
-        if cache is None:
-            cache = self._civil_event_cache = {}
-        if state is not None:
-            cache_changed = update_civil_event_cache(
-                cache,
-                now=dt_util.now(),
-                next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
-                next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
-                ramp_duration=max(
-                    (runtime.config.ramp_duration for runtime in self.lights.values()),
-                    default=timedelta(0),
-                ),
-            )
-            if cache_changed and self._civil_event_cache_save is not None:
-                self._civil_event_cache_save(serialize_civil_event_cache(cache))
-        self._sun_samples.extend(civil_event_cache_samples(cache))
-        self._sun_samples.extend(_reconstructed_civil_samples(state, elevation))
-        self._sun_samples.extend(_upcoming_civil_samples(state))
-        self._sun_samples.append(SunElevationSample(dt_util.now(), elevation))
-        cutoff = dt_util.now() - timedelta(days=2)
-        bounded = (sample for sample in self._sun_samples if sample.at >= cutoff)
-        self._sun_samples = _dedupe_sun_samples(bounded)
-
     def _record_decision(
         self, runtime: LightRuntime, decision: str, at: datetime
     ) -> None:
@@ -627,70 +543,6 @@ def _window_status(window: RampWindow | None) -> dict[str, str] | None:
         "start": window.start.isoformat(),
         "end": window.end.isoformat(),
     }
-
-
-def uses_civil_schedule(config: ResolvedLightConfig) -> bool:
-    """Return whether a light config depends on sun elevation."""
-    return (
-        config.dim_schedule.type is ScheduleType.CIVIL_SUN
-        or config.brighten_schedule.type is ScheduleType.CIVIL_SUN
-    )
-
-
-def schedule_uses_event(config: ResolvedLightConfig, event: SunEvent) -> bool:
-    """Return whether either schedule starts at the given civil event."""
-    return (
-        config.dim_schedule.event is event or config.brighten_schedule.event is event
-    )
-
-
-def _state_elevation(state: State | None) -> float | None:
-    """Extract elevation from sun.sun state."""
-    if state is None:
-        return None
-    elevation = state.attributes.get("elevation")
-    if elevation is None:
-        return None
-    try:
-        return float(elevation)
-    except (TypeError, ValueError):
-        return None
-
-
-def _dedupe_sun_samples(
-    samples: Collection[SunElevationSample],
-) -> list[SunElevationSample]:
-    """Deduplicate samples while preserving exact civil crossing markers."""
-    by_time: dict[datetime, SunElevationSample] = {}
-    for sample in samples:
-        existing = by_time.get(sample.at)
-        if existing is None or existing.elevation != CIVIL_ELEVATION:
-            by_time[sample.at] = sample
-    return sorted(by_time.values(), key=lambda sample: sample.at)
-
-
-def _reconstructed_civil_samples(
-    state: State | None, elevation: float
-) -> list[SunElevationSample]:
-    """Reconstruct the last civil crossing exposed by sun.sun after reload."""
-    if state is None:
-        return []
-    return reconstructed_civil_samples(
-        elevation=elevation,
-        next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
-        next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
-        now=dt_util.now(),
-    )
-
-
-def _upcoming_civil_samples(state: State | None) -> list[SunElevationSample]:
-    """Reconstruct upcoming civil crossings exposed by sun.sun."""
-    if state is None:
-        return []
-    return upcoming_civil_samples(
-        next_dawn=state.attributes.get(SUN_ATTR_NEXT_DAWN),
-        next_dusk=state.attributes.get(SUN_ATTR_NEXT_DUSK),
-    )
 
 
 async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:
