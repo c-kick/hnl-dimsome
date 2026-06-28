@@ -4,27 +4,16 @@
 
 Dimsome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming.
 
-It controls configured lights with two daily ramps:
+> **Beta.** Dimsome is still in active development. Behavior and configuration may change between releases.
 
-- dim from the day target to the night target
-- brighten from the night target to the day target
+It drives configured lights with two daily ramps:
 
-By default, Dimsome dims at civil dusk and brightens at civil dawn. Each ramp can also be configured with a fixed time. Fixed times take precedence over the civil-sun schedule.
+- a **dim** ramp from the day target down to the night target
+- a **brighten** ramp from the night target up to the day target
 
-## Features
+By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn, taken directly from Home Assistant's astral data for the current date. Either ramp can instead use a fixed clock time, which takes precedence over the civil-sun schedule.
 
-- Home Assistant config flow setup
-- Dimsome sidebar panel for managing global defaults and per-light settings
-- Civil dusk and civil dawn schedules anchored from `sun.sun` and cached by Dimsome
-- Fixed-time dimming and brightening schedules
-- Per-light minimum and maximum brightness targets
-- Optional `color_temp_kelvin` targets
-- Per-light schedule, ramp duration, and override behavior
-- Manual override stand-down during an active ramp
-- Optional grace-period resume after a manual override
-- Per-light enable switches, resume buttons, and diagnostic sensors
-- `dimsome.resume` service for automations
-- Optional split `light.turn_on` calls for lights that cannot apply brightness and color together
+Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`).
 
 ## Installation
 
@@ -34,7 +23,7 @@ Copy or mount the integration directory into Home Assistant:
 custom_components/dimsome -> /config/custom_components/dimsome
 ```
 
-For local development, this repository is intended to be bind-mounted into the Home Assistant container:
+For local development, bind-mount this repository into the Home Assistant container:
 
 ```text
 ./custom_components/dimsome -> /config/custom_components/dimsome:ro
@@ -44,74 +33,46 @@ Restart Home Assistant after adding or changing integration Python files.
 
 ## Setup
 
-1. In Home Assistant, go to **Settings -> Devices & services**.
-2. Select **Add integration**.
-3. Search for **Dimsome**.
-4. Create the Dimsome integration entry.
-5. Open the **Dimsome** sidebar panel.
-6. Configure global defaults and add the lights Dimsome should control.
-
-Dimsome supports one integration entry.
-
-## How It Works
-
-Dimsome computes the expected light target from the current schedule window.
-
-During a dim ramp, it moves each enabled light from its configured high/day target to its low/night target. During a brighten ramp, it moves each enabled light from its configured low/night target to its high/day target.
-
-Outside active ramps, Dimsome applies the correct plateau target when a controlled light turns on:
-
-- after the dim ramp and before the next brighten ramp, lights are set to the low/night target
-- after the brighten ramp and before the next dim ramp, lights are set to the high/day target
-
-If a light is manually changed during an active ramp, Dimsome stands down for that light for the rest of that ramp. Use the resume button or `dimsome.resume` service to hand control back sooner.
-
-Civil dawn and dusk come directly from Home Assistant's astral data (`get_astral_event_date`), which is deterministic for any calendar date. Dimsome simply asks for the civil dawn/dusk of the days around "now" whenever it needs a ramp start time. There is no elevation sampling, crossing reconstruction, or anchor cache: the same query works identically on a fresh start, after a restart, or across midnight, so a dusk ramp always begins at civil dusk and ramps down rather than snapping to the night target.
+1. In Home Assistant, go to **Settings → Devices & services**.
+2. Select **Add integration** and search for **Dimsome**.
+3. Create the entry (Dimsome supports a single integration entry).
+4. Open the **Dimsome** sidebar panel and configure global defaults and the lights to control.
 
 ## Configuration
 
-Most configuration should be done from the Dimsome sidebar panel.
+Configuration is done from the Dimsome sidebar panel. Per-light settings fall back to the global defaults unless overridden.
 
-Global defaults include:
+### Global settings
 
-- dim schedule
-- brighten schedule
-- ramp duration
-- manual override resume mode
-- override grace period
-- split turn-on calls
-- native user IDs: Home Assistant user IDs whose light changes are treated like automations instead of manual overrides (useful for Node-RED or other token-based integrations that drive lights)
+- **Dimming** / **Brightening** schedule — civil sun (`civil_dusk` / `civil_dawn`) or a fixed time.
+- **Ramp Duration** — how long each transition takes.
+- **Override Resume** — how control returns after a manual change: `Manual Only` or `After Grace Period`.
+- **Grace Period** — delay before automatic resume (used by `After Grace Period`).
+- **Split Brightness & Color Calls** — send brightness and color as separate `light.turn_on` calls, for lights that reject combined updates.
+- **Apply On Recovery** — re-apply the current target when a light comes back online while already on.
+- **Native Users** — comma-separated Home Assistant user IDs whose light changes are treated as automations rather than manual overrides (useful for Node-RED or other token-based integrations).
 
-Each light includes:
+### Per-light settings
 
-- light entity ID
-- enabled state
-- minimum brightness percentage
-- maximum brightness percentage
-- optional minimum color temperature
-- optional maximum color temperature
-- optional per-light overrides for schedule, ramp duration, and override behavior
+- **Light Entity** — the light to control.
+- **Minimum / Maximum Brightness** — night and day targets, as a percentage from `1` to `100` (converted internally to Home Assistant's `1`–`255` scale).
+- **Adjust Color Temperature** — optional minimum/maximum `color_temp_kelvin` targets (color support is intentionally limited to color temperature).
+- **Split Brightness & Color Calls**, **Apply On Recovery** — per-light overrides of the global toggles.
+- **Settle Delay** — wait after a light turns on before applying its target.
+- **Schedule / Ramp Duration / Override Resume / Grace Period overrides** — per-light overrides of the global schedule and resume behavior.
 
-Brightness values are percentages from `1` to `100`. Dimsome converts them to Home Assistant's `1` to `255` brightness scale internally.
-
-Color support is intentionally limited to `color_temp_kelvin`.
+Per-light **enable/pause** is handled by the `Dimsome enabled` switch entity.
 
 ## Entities
 
-Dimsome creates helper entities for configured lights:
+- `button.dimsome_resume` — resume Dimsome control for all configured lights.
+- Per-light resume buttons — resume one light.
+- Per-light `Dimsome enabled` switches — enable or pause control for one light.
+- Per-light diagnostic sensors — expose runtime state via attributes such as `status`, `active_window`, `next_window_start`, `target`, and manual-override state. During an active ramp `next_window_start` points to the *following* ramp; use `active_window` and `target` to confirm Dimsome is ramping correctly.
 
-- `button.dimsome_resume` resumes Dimsome control for all configured lights.
-- Per-light resume buttons resume Dimsome control for one light.
-- Per-light `Dimsome enabled` switches enable or pause Dimsome control for one light.
-- Per-light diagnostic sensors expose runtime state such as `status`, `active_window`, `civil_event_cache`, `next_window_start`, `target`, and manual override state.
+## Service: `dimsome.resume`
 
-During an active ramp, `next_window_start` points to the following ramp. Use `active_window` and `target` to determine whether Dimsome is currently ramping correctly.
-
-## Services
-
-### `dimsome.resume`
-
-Resume Dimsome control for all configured lights, or only selected light entities.
+Resume Dimsome control for all configured lights, or only the listed entities.
 
 ```yaml
 service: dimsome.resume
@@ -123,9 +84,9 @@ data:
 
 Omit `entity_id` to resume all configured lights.
 
-## YAML Import
+## YAML import
 
-The primary setup path is the Home Assistant UI and Dimsome sidebar panel. YAML remains available as an import path for development and migration.
+The UI and panel are the primary setup path. YAML remains available as an import path for development and migration; it is imported into the same single entry.
 
 ```yaml
 dimsome:
@@ -137,9 +98,10 @@ dimsome:
       type: civil_sun
       event: civil_dawn
     ramp_duration: "01:00:00"
-    override_resume_mode: manual_only
+    override_resume_mode: manual_only      # or after_grace_period
     override_grace_period: "00:15:00"
     split_turn_on_calls: false
+    apply_on_recovered_on: true
     native_user_ids:
       - "abcdef0123456789abcdef0123456789"  # e.g. the Node-RED user
   lights:
@@ -160,38 +122,18 @@ dimsome:
       ramp_duration: "00:30:00"
       override_resume_mode: after_grace_period
       override_grace_period: "00:15:00"
+      settle_delay: 0.5
       dim_schedule:
         type: fixed_time
         at: "22:30"
 ```
 
-Supported schedule forms:
-
-```yaml
-type: fixed_time
-at: "22:30"
-```
-
-```yaml
-type: civil_sun
-event: civil_dusk
-```
-
-Civil sun events are `civil_dusk` and `civil_dawn`.
-
-Supported override resume modes are:
-
-- `manual_only`
-- `after_grace_period`
+A schedule is either `{ type: fixed_time, at: "HH:MM" }` or `{ type: civil_sun, event: civil_dawn | civil_dusk }`.
 
 ## Development
-
-Run tests from the repository root:
 
 ```bash
 pytest
 ```
 
-Source code lives in `custom_components/dimsome/`. Tests live in `tests/`.
-
-The integration version is defined in `custom_components/dimsome/const.py`; Home Assistant manifest metadata lives in `custom_components/dimsome/manifest.json`.
+Source lives in `custom_components/dimsome/`; tests in `tests/`. The integration version is in `custom_components/dimsome/const.py`, and Home Assistant manifest metadata in `custom_components/dimsome/manifest.json`.
