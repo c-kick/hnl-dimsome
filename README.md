@@ -17,13 +17,27 @@ Between ramps, Dimsome holds the plateau: when a controlled light turns on after
 
 ## Installation
 
-Copy or mount the integration directory into Home Assistant:
+Clone (or update) this repository, then copy the integration into your Home Assistant `custom_components` directory:
+
+```bash
+# first time
+git clone https://github.com/c-kick/hnl-dimsome.git
+cd hnl-dimsome
+
+# to update later
+git pull
+
+# copy the integration into Home Assistant's config folder
+cp -r custom_components/dimsome /config/custom_components/dimsome
+```
+
+The integration must end up here:
 
 ```text
 custom_components/dimsome -> /config/custom_components/dimsome
 ```
 
-For local development, bind-mount this repository into the Home Assistant container:
+For local development, bind-mount this repository into the Home Assistant container instead of copying:
 
 ```text
 ./custom_components/dimsome -> /config/custom_components/dimsome:ro
