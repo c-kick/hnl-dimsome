@@ -20,7 +20,7 @@ import voluptuous as vol
 from homeassistant.components.light import ATTR_BRIGHTNESS, DOMAIN as LIGHT_DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Event, HomeAssistant, ServiceCall, State, callback
+from homeassistant.core import Context, Event, HomeAssistant, ServiceCall, State, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import (
@@ -423,6 +423,18 @@ class DimsomeController:
         state = self.hass.states.get(runtime.config.entity_id)
         if state is None or state.state != STATE_ON:
             return
+        context = getattr(state, "context", None)
+        window = active_window(runtime.config, now, self._civil_lookup)
+        if (
+            window is None
+            and getattr(context, "id", None) != runtime.last_apply_context_id
+            and should_stand_down_for_context(
+                context,
+                set(self._automation_context_ids),
+                self._native_user_ids,
+            )
+        ):
+            return
         if target_matches_state(current, state.attributes):
             return
         runtime.last_target = None
@@ -448,8 +460,10 @@ class DimsomeController:
         runtime.in_flight = True
         runtime.expected_target = target
         runtime.ignore_updates_until = dt_util.now() + IGNORE_UPDATE_WINDOW
+        context = Context()
+        runtime.last_apply_context_id = context.id
         try:
-            await self._async_call_light(runtime, target)
+            await self._async_call_light(runtime, target, context)
             runtime.last_target = target
             runtime.expected_target = target
             runtime.ignore_updates_until = dt_util.now() + IGNORE_UPDATE_WINDOW
@@ -460,7 +474,9 @@ class DimsomeController:
             runtime.pending_target = None
             await self._async_apply_target(runtime, pending)
 
-    async def _async_call_light(self, runtime: LightRuntime, target: LightTarget) -> None:
+    async def _async_call_light(
+        self, runtime: LightRuntime, target: LightTarget, context: Context
+    ) -> None:
         """Call light.turn_on for brightness and optional color."""
         base_data: dict[str, Any] = {
             ATTR_ENTITY_ID: runtime.config.entity_id,
@@ -474,7 +490,7 @@ class DimsomeController:
                 if index > 0:
                     await asyncio.sleep(SPLIT_TURN_ON_DELAY)
                 await self.hass.services.async_call(
-                    LIGHT_DOMAIN, "turn_on", data, blocking=True
+                    LIGHT_DOMAIN, "turn_on", data, blocking=True, context=context
                 )
             return
         await self.hass.services.async_call(
@@ -482,6 +498,7 @@ class DimsomeController:
             "turn_on",
             {**base_data, **color_data},
             blocking=True,
+            context=context,
         )
 
     def _schedule_grace_resume(self, runtime: LightRuntime) -> None:

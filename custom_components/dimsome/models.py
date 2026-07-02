@@ -131,6 +131,7 @@ class LightRuntime:
     grace_unsub: Any | None = None
     last_decision: str | None = None
     last_decision_at: datetime | None = None
+    last_apply_context_id: str | None = None
 
 
 def parse_time(value: str) -> time:

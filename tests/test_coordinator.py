@@ -214,11 +214,48 @@ def test_turn_on_verification_reapplies_mismatched_target(monkeypatch) -> None:
 
     monkeypatch.setattr(coordinator.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(coordinator, "target_for_now", lambda *_: target)
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: object())
     monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
 
     asyncio.run(controller._async_verify_turn_on_target(runtime))
 
     assert calls == [(runtime, target, None)]
+
+
+def test_turn_on_verification_does_not_revert_manual_plateau_change(
+    monkeypatch,
+) -> None:
+    """Plateau-time manual changes after turn-on must not be defended."""
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    target = LightTarget(30)
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(
+                state="on",
+                attributes={"brightness": 255},
+                context=SimpleNamespace(id="manual", parent_id=None, user_id="user"),
+            )
+        )
+    )
+    controller._automation_context_ids = []
+    controller._native_user_ids = frozenset()
+    calls = []
+
+    async def fake_sleep(_: float) -> None:
+        return None
+
+    async def fake_apply(call_runtime: LightRuntime, call_target: LightTarget) -> None:
+        calls.append((call_runtime, call_target))
+
+    monkeypatch.setattr(coordinator.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(coordinator, "target_for_now", lambda *_: target)
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: None)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+
+    asyncio.run(controller._async_verify_turn_on_target(runtime))
+
+    assert calls == []
 
 
 def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None:
