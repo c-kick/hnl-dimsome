@@ -415,3 +415,47 @@ def test_tick_records_last_decision_for_diagnostics(monkeypatch) -> None:
 
     assert runtime.last_decision == "skipped_state_off"
     assert runtime.last_decision_at == now
+
+
+def test_one_failing_light_does_not_starve_later_lights_or_timers(monkeypatch) -> None:
+    """A per-light apply failure must not abort the whole tick."""
+    now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
+    dim_schedule = ScheduleConfig(ScheduleType.FIXED_TIME, at="22:00")
+    broken = LightRuntime(
+        config=_civil_config(entity_id="light.broken", dim_schedule=dim_schedule)
+    )
+    fine = LightRuntime(
+        config=_civil_config(entity_id="light.fine", dim_schedule=dim_schedule)
+    )
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.broken": broken, "light.fine": fine}
+    controller._ramp_unsub = None
+    controller._wake_unsub = None
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(state="on", attributes={})
+        )
+    )
+    controller._civil_lookup = lambda event, day: None
+    calls = []
+    intervals = []
+
+    async def fake_apply(runtime: LightRuntime, target: LightTarget) -> None:
+        calls.append(runtime.config.entity_id)
+        if runtime.config.entity_id == "light.broken":
+            raise RuntimeError("simulated light integration failure")
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+    monkeypatch.setattr(
+        coordinator,
+        "async_track_time_interval",
+        lambda *args: intervals.append(args) or (lambda: None),
+    )
+
+    asyncio.run(controller.async_tick())
+
+    assert calls == ["light.broken", "light.fine"]
+    assert broken.last_decision == "apply_failed"
+    assert fine.last_decision == "applied_target"
+    assert intervals == [(controller.hass, controller.async_tick, coordinator.RAMP_INTERVAL)]

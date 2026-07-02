@@ -282,7 +282,15 @@ class DimsomeController:
                 )
                 self._record_decision(runtime, "skipped_manual_override", now)
                 continue
-            await self._async_apply_target(runtime, target)
+            try:
+                await self._async_apply_target(runtime, target)
+            except Exception:
+                _LOGGER.exception(
+                    "Failed to apply Dimsome target for %s",
+                    runtime.config.entity_id,
+                )
+                self._record_decision(runtime, "apply_failed", now)
+                continue
             self._record_decision(runtime, "applied_target", now)
 
         if any_active:
