@@ -386,6 +386,48 @@ def test_initial_on_state_during_ramp_is_not_manual_override(monkeypatch) -> Non
     assert tasks == [runtime]
 
 
+def test_own_clamped_service_echo_does_not_stand_down_ramp(monkeypatch) -> None:
+    """A device echo from Dimsome's own context is not a manual override."""
+    now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
+    runtime = LightRuntime(
+        config=SimpleNamespace(
+            entity_id="light.test",
+            enabled=True,
+            apply_on_recovered_on=True,
+        )
+    )
+    runtime.expected_target = LightTarget(1)
+    runtime.ignore_updates_until = now + timedelta(seconds=10)
+    runtime.last_apply_context_id = "dimsome-call"
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._automation_context_ids = []
+    controller._native_user_ids = frozenset()
+
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: object())
+    monkeypatch.setattr(controller, "_schedule_grace_resume", lambda _: None)
+
+    controller._async_light_changed(
+        SimpleNamespace(
+            data={
+                "entity_id": "light.test",
+                "old_state": SimpleNamespace(state="on"),
+                "new_state": SimpleNamespace(
+                    state="on",
+                    attributes={"brightness": 26},
+                    context=SimpleNamespace(
+                        id="dimsome-call", parent_id=None, user_id=None
+                    ),
+                ),
+            }
+        )
+    )
+
+    assert runtime.stood_down is False
+    assert runtime.stood_down_window is None
+
+
 def test_tick_applies_dusk_ramp_from_civil_lookup(monkeypatch) -> None:
     """At civil dusk the controller starts the dim ramp at max, never snaps to min."""
     now = datetime(2026, 5, 31, 22, 36, 17, tzinfo=TZ)  # exactly civil dusk

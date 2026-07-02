@@ -359,6 +359,8 @@ class DimsomeController:
         if new_state.state != STATE_ON:
             runtime.last_target = None
             return
+        if getattr(new_state.context, "id", None) == runtime.last_apply_context_id:
+            return
         if should_ignore_state_change(
             in_flight=runtime.in_flight,
             now=now,
