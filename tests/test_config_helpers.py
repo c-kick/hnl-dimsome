@@ -32,6 +32,26 @@ def test_default_config_uses_civil_sun_for_both_ramps() -> None:
     }
 
 
+def test_yaml_import_does_not_update_existing_config_entry() -> None:
+    """YAML imports should seed only the initial entry, not overwrite panel edits."""
+    config_flow = ast.parse(Path("custom_components/dimsome/config_flow.py").read_text())
+    import_step = next(
+        node
+        for node in ast.walk(config_flow)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name == "async_step_import"
+    )
+    abort_call = next(
+        node
+        for node in ast.walk(import_step)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "_abort_if_unique_id_configured"
+    )
+
+    assert all(keyword.arg != "updates" for keyword in abort_call.keywords)
+
+
 def test_switch_enabled_update_preserves_full_config() -> None:
     """Persisting switch state must not replace the integration config."""
     config = {

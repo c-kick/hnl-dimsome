@@ -50,5 +50,5 @@ class DimsomeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> config_entries.ConfigFlowResult:
         """Import Dimsome YAML configuration."""
         await self.async_set_unique_id(DOMAIN)
-        self._abort_if_unique_id_configured(updates=user_input)
+        self._abort_if_unique_id_configured()
         return self.async_create_entry(title="Dimsome", data=user_input)
