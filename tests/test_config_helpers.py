@@ -5,7 +5,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from custom_components.dimsome.config_helpers import config_with_light_enabled
+from custom_components.dimsome.config_helpers import (
+    config_with_light_enabled,
+    config_with_current_light_enabled,
+)
 
 
 def test_default_config_uses_civil_sun_for_both_ramps() -> None:
@@ -69,3 +72,46 @@ def test_switch_enabled_update_refuses_missing_light() -> None:
     config = {"global": {}, "lights": []}
 
     assert config_with_light_enabled(config, "light.missing", False) is None
+
+
+def test_panel_save_preserves_current_enabled_flags() -> None:
+    """Panel saves must not revert enabled changes made after panel load."""
+    stale_panel_config = {
+        "global": {},
+        "lights": [
+            {
+                "entity_id": "light.one",
+                "enabled": True,
+                "min_brightness_pct": 20,
+                "max_brightness_pct": 70,
+            },
+            {
+                "entity_id": "light.new",
+                "enabled": True,
+                "min_brightness_pct": 10,
+                "max_brightness_pct": 80,
+            },
+        ],
+    }
+    current_config = {
+        "global": {},
+        "lights": [
+            {
+                "entity_id": "light.one",
+                "enabled": False,
+                "min_brightness_pct": 20,
+                "max_brightness_pct": 100,
+            }
+        ],
+    }
+
+    updated = config_with_current_light_enabled(stale_panel_config, current_config)
+
+    assert updated["lights"][0] == {
+        "entity_id": "light.one",
+        "enabled": False,
+        "min_brightness_pct": 20,
+        "max_brightness_pct": 70,
+    }
+    assert updated["lights"][1]["enabled"] is True
+    assert stale_panel_config["lights"][0]["enabled"] is True

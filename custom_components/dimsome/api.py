@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
+from .config_helpers import config_with_current_light_enabled
 from .models import resolve_light_configs
 
 
@@ -99,7 +100,9 @@ async def ws_save_config(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "not_configured", "Dimsome is not set up")
         return
 
-    config = deepcopy(msg["config"])
+    config = config_with_current_light_enabled(
+        deepcopy(msg["config"]), _current_config(entry)
+    )
     config.setdefault("global", {})
     config.setdefault("lights", [])
     error = _validate_config(config)
