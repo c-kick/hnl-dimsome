@@ -144,7 +144,9 @@ class DimsomeController:
 
     async def async_resume(self, entity_ids: Collection[str] | None = None) -> None:
         """Resume Dimsome control for selected lights."""
-        selected = set(entity_ids or self.lights)
+        selected = set(self.lights if entity_ids is None else entity_ids)
+        if not selected:
+            return
         for entity_id, runtime in self.lights.items():
             if entity_id not in selected:
                 continue
@@ -578,10 +580,14 @@ def _window_status(window: RampWindow | None) -> dict[str, str] | None:
 async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Handle dimsome.resume."""
     entity_ids = call.data.get(ATTR_ENTITY_ID)
-    if isinstance(entity_ids, str):
+    if ATTR_ENTITY_ID not in call.data:
+        selected = None
+    elif isinstance(entity_ids, str):
         selected = {entity_ids}
     else:
-        selected = set(entity_ids) if entity_ids else None
+        selected = set(entity_ids)
+        if not selected:
+            return
     controllers: list[DimsomeController] = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.state is ConfigEntryState.LOADED:

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from homeassistant.const import ATTR_ENTITY_ID
+
 from custom_components.dimsome.const import DOMAIN, SERVICE_RESUME
 from custom_components.dimsome.models import (
     ColorMode,
@@ -189,6 +191,52 @@ def test_resume_clears_cached_targets(monkeypatch) -> None:
     assert runtime.last_target is None
     assert runtime.pending_target is None
     assert runtime.expected_target is None
+
+
+def test_resume_with_empty_selection_does_not_resume_all(monkeypatch) -> None:
+    """An explicit empty selection is a no-op, not an alias for every light."""
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    runtime.stood_down = True
+    controller.lights = {"light.test": runtime}
+    tick_calls = []
+
+    async def fake_tick() -> None:
+        tick_calls.append(None)
+
+    monkeypatch.setattr(controller, "async_tick", fake_tick)
+
+    asyncio.run(controller.async_resume([]))
+
+    assert runtime.stood_down is True
+    assert tick_calls == []
+
+
+def test_resume_service_empty_entity_list_is_noop() -> None:
+    """Service calls with entity_id: [] must not resume every light."""
+    calls = []
+
+    class _FakeController:
+        lights = {"light.test": object()}
+
+        async def async_resume(self, selected: object) -> None:
+            calls.append(selected)
+
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_entries=lambda domain: [
+                SimpleNamespace(
+                    state=coordinator.ConfigEntryState.LOADED,
+                    runtime_data=_FakeController(),
+                )
+            ]
+        )
+    )
+    call = SimpleNamespace(data={ATTR_ENTITY_ID: []})
+
+    asyncio.run(coordinator.async_resume_service(hass, call))
+
+    assert calls == []
 
 
 def test_turn_on_verification_reapplies_mismatched_target(monkeypatch) -> None:
