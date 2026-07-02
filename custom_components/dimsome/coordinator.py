@@ -402,6 +402,9 @@ class DimsomeController:
         """Apply the current expected value when a light turns on."""
         if runtime.config.settle_delay > timedelta(0):
             await asyncio.sleep(runtime.config.settle_delay.total_seconds())
+        state = self.hass.states.get(runtime.config.entity_id)
+        if state is None or state.state != STATE_ON:
+            return
         now = dt_util.now()
         target = target_for_now(runtime.config, now, self._civil_lookup)
         if target is not None:

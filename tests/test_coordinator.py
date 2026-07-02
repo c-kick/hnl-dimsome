@@ -227,6 +227,11 @@ def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None
     runtime = LightRuntime(
         config=SimpleNamespace(entity_id="light.test", settle_delay=timedelta(seconds=2))
     )
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(state="on", attributes={})
+        )
+    )
     calls = []
 
     async def fake_sleep(delay: float) -> None:
@@ -257,6 +262,40 @@ def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None
         ("apply", runtime, target),
         ("verify", runtime),
     ]
+
+
+def test_turn_on_handler_does_not_relight_light_turned_off_during_settle_delay(
+    monkeypatch,
+) -> None:
+    """A light switched off during settle delay must stay off."""
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    runtime = LightRuntime(
+        config=SimpleNamespace(entity_id="light.test", settle_delay=timedelta(seconds=2))
+    )
+    controller.hass = SimpleNamespace(
+        states=SimpleNamespace(
+            get=lambda entity_id: SimpleNamespace(state="off", attributes={})
+        )
+    )
+    calls = []
+
+    async def fake_sleep(delay: float) -> None:
+        calls.append(("sleep", delay))
+
+    async def fake_apply(call_runtime: LightRuntime, call_target: LightTarget) -> None:
+        calls.append(("apply", call_runtime, call_target))
+
+    async def fake_verify(call_runtime: LightRuntime) -> None:
+        calls.append(("verify", call_runtime))
+
+    monkeypatch.setattr(coordinator.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(coordinator, "target_for_now", lambda *_: LightTarget(50))
+    monkeypatch.setattr(controller, "_async_apply_target", fake_apply)
+    monkeypatch.setattr(controller, "_async_verify_turn_on_target", fake_verify)
+
+    asyncio.run(controller._async_handle_turn_on(runtime))
+
+    assert calls == [("sleep", 2.0)]
 
 
 def test_initial_on_state_during_ramp_is_not_manual_override(monkeypatch) -> None:
