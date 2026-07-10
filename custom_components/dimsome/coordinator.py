@@ -350,36 +350,51 @@ class DimsomeController:
             self._create_turn_on_task(runtime)
             return
 
-        if old_state is not None and old_state.state == STATE_OFF and new_state.state == STATE_ON:
-            runtime.stood_down = False
-            runtime.stood_down_window = None
-            runtime.last_target = None
-            self._create_turn_on_task(runtime)
-            return
-
         now = dt_util.now()
         if new_state.state != STATE_ON:
             runtime.last_target = None
+            window = active_window(runtime.config, now, self._civil_lookup)
+            if window is not None and should_stand_down_for_context(
+                new_state.context,
+                set(self._automation_context_ids),
+                self._native_user_ids,
+            ):
+                runtime.stood_down = True
+                runtime.stood_down_window = window
+                self._schedule_grace_resume(runtime)
             return
         if getattr(new_state.context, "id", None) == runtime.last_apply_context_id:
             return
+        window = active_window(runtime.config, now, self._civil_lookup)
+        manual_context = should_stand_down_for_context(
+            new_state.context,
+            set(self._automation_context_ids),
+            self._native_user_ids,
+        )
+        if old_state is not None and old_state.state == STATE_OFF:
+            runtime.last_target = None
+            if window is not None and manual_context:
+                runtime.stood_down = True
+                runtime.stood_down_window = window
+                self._schedule_grace_resume(runtime)
+                return
+            runtime.stood_down = False
+            runtime.stood_down_window = None
+            self._create_turn_on_task(runtime)
+            return
+
+        # Known user actions take precedence over state-echo heuristics.
         if should_ignore_state_change(
             in_flight=runtime.in_flight,
             now=now,
             ignore_updates_until=runtime.ignore_updates_until,
             expected_target=runtime.expected_target,
             attrs=new_state.attributes,
-        ):
+        ) and not getattr(new_state.context, "user_id", None):
             return
-
-        window = active_window(runtime.config, now, self._civil_lookup)
         if window is None:
             return
-        if not should_stand_down_for_context(
-            new_state.context,
-            set(self._automation_context_ids),
-            self._native_user_ids,
-        ):
+        if not manual_context:
             _LOGGER.debug("Ignoring automation-originated change for %s", entity_id)
             return
         runtime.stood_down = True
@@ -471,6 +486,9 @@ class DimsomeController:
             runtime.last_target = target
             runtime.expected_target = target
             runtime.ignore_updates_until = dt_util.now() + IGNORE_UPDATE_WINDOW
+        except Exception:
+            runtime.pending_target = None
+            raise
         finally:
             runtime.in_flight = False
         if runtime.pending_target is not None:
@@ -517,9 +535,12 @@ class DimsomeController:
             return
 
         async def _resume(_: Any) -> None:
+            current_window = active_window(runtime.config, dt_util.now(), self._civil_lookup)
+            runtime.grace_unsub = None
+            if current_window == runtime.stood_down_window:
+                return
             runtime.stood_down = False
             runtime.stood_down_window = None
-            runtime.grace_unsub = None
             await self.async_tick()
 
         runtime.grace_unsub = async_call_later(

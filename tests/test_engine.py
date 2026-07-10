@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -429,6 +429,41 @@ def test_missing_civil_time_yields_no_target() -> None:
     assert target_for_now(config, now, lookup) is None
 
 
+def test_fixed_schedule_uses_elapsed_time_during_fall_back() -> None:
+    """The repeated local hour must not make an already-started ramp look future."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(ScheduleType.FIXED_TIME, at="02:30"),
+            "brighten_schedule": ScheduleConfig(ScheduleType.FIXED_TIME, at="10:00"),
+        }
+    )
+    now = datetime(2026, 10, 25, 2, 15, tzinfo=TZ, fold=1)
+
+    window = active_window(config, now, no_civil)
+
+    assert window is not None
+    assert window.start.astimezone(UTC) == datetime(2026, 10, 25, 0, 30, tzinfo=UTC)
+    assert target_for_now(config, now, no_civil).brightness_pct == 28
+
+
+def test_fixed_schedule_normalizes_nonexistent_spring_time() -> None:
+    """A skipped local time must not begin its ramp before the normalized instant."""
+    config = ResolvedLightConfig(
+        **{
+            **fixed_config().__dict__,
+            "dim_schedule": ScheduleConfig(ScheduleType.FIXED_TIME, at="02:30"),
+            "brighten_schedule": ScheduleConfig(ScheduleType.FIXED_TIME, at="10:00"),
+        }
+    )
+    before_normalized_start = datetime(2026, 3, 29, 3, 15, tzinfo=TZ)
+    normalized_start = datetime(2026, 3, 29, 3, 30, tzinfo=TZ)
+
+    assert active_window(config, before_normalized_start, no_civil) is None
+    assert next_window_start(config, before_normalized_start, no_civil) == normalized_start
+    assert active_window(config, normalized_start, no_civil) is not None
+
+
 def test_target_matching_uses_tolerance() -> None:
     """Expected reports tolerate HA/device quantization."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
@@ -691,3 +726,10 @@ def test_rejects_invalid_native_user_ids() -> None:
                 ],
             }
         )
+
+
+@pytest.mark.parametrize("global_config", [None, []])
+def test_rejects_non_object_global_config(global_config: object) -> None:
+    """Malformed global config should produce a validation error, not AttributeError."""
+    with pytest.raises(ValueError, match="global must be an object"):
+        resolve_light_configs({"global": global_config, "lights": []})

@@ -168,6 +168,109 @@ def test_unknown_device_context_is_manual_override() -> None:
     assert coordinator.should_stand_down_for_context(context, {"automation"}) is True
 
 
+def test_manual_turn_on_during_ramp_stands_down_without_applying(monkeypatch) -> None:
+    """A manual off-to-on transition must not be overwritten in the ramp."""
+    runtime = LightRuntime(
+        config=SimpleNamespace(
+            entity_id="light.test",
+            enabled=True,
+            apply_on_recovered_on=True,
+        )
+    )
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._civil_lookup = lambda *_: None
+    controller._automation_context_ids = []
+    controller._native_user_ids = frozenset()
+    controller._schedule_grace_resume = lambda _: None
+    tasks = []
+    controller._create_turn_on_task = lambda call_runtime: tasks.append(call_runtime)
+    window = SimpleNamespace()
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: datetime(2026, 5, 4, 22, 30, tzinfo=TZ))
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: window)
+
+    controller._async_light_changed(
+        SimpleNamespace(
+            data={
+                ATTR_ENTITY_ID: "light.test",
+                "old_state": SimpleNamespace(state="off"),
+                "new_state": SimpleNamespace(
+                    state="on",
+                    attributes={"brightness": 100},
+                    context=SimpleNamespace(id="manual", parent_id=None, user_id="user"),
+                ),
+            }
+        )
+    )
+
+    assert runtime.stood_down is True
+    assert runtime.stood_down_window is window
+    assert tasks == []
+
+
+def test_user_update_during_in_flight_call_stands_down(monkeypatch) -> None:
+    """A known user change must win over Dimsome's in-flight guard."""
+    runtime = LightRuntime(
+        config=SimpleNamespace(entity_id="light.test", enabled=True, apply_on_recovered_on=True)
+    )
+    runtime.in_flight = True
+    runtime.expected_target = LightTarget(50)
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller.lights = {"light.test": runtime}
+    controller._civil_lookup = lambda *_: None
+    controller._automation_context_ids = []
+    controller._native_user_ids = frozenset()
+    controller._schedule_grace_resume = lambda _: None
+    window = SimpleNamespace()
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: datetime(2026, 5, 4, 22, 30, tzinfo=TZ))
+    monkeypatch.setattr(coordinator, "active_window", lambda *_: window)
+
+    controller._async_light_changed(
+        SimpleNamespace(
+            data={
+                ATTR_ENTITY_ID: "light.test",
+                "old_state": SimpleNamespace(state="on"),
+                "new_state": SimpleNamespace(
+                    state="on",
+                    attributes={"brightness": 255},
+                    context=SimpleNamespace(id="manual", parent_id=None, user_id="user"),
+                ),
+            }
+        )
+    )
+
+    assert runtime.stood_down is True
+    assert runtime.stood_down_window is window
+
+
+def test_failed_apply_discards_stale_pending_target() -> None:
+    """A failed call must not replay a target queued by an overlapping tick."""
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    runtime.last_target = LightTarget(50)
+    controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    calls = []
+    failed = True
+
+    async def fake_call(call_runtime, target, context):
+        nonlocal failed
+        calls.append(target.brightness_pct)
+        if failed:
+            await controller._async_apply_target(call_runtime, LightTarget(49))
+            failed = False
+            raise RuntimeError("simulated service failure")
+
+    controller._async_call_light = fake_call
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        asyncio.run(controller._async_apply_target(runtime, LightTarget(48)))
+
+    asyncio.run(controller._async_apply_target(runtime, LightTarget(47)))
+
+    assert calls == [48, 47]
+    assert runtime.last_target == LightTarget(47)
+    assert runtime.pending_target is None
+
+
 def test_resume_clears_cached_targets(monkeypatch) -> None:
     """Resume must force a fresh apply even if the previous command was cached."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)

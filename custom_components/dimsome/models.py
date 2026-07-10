@@ -209,7 +209,10 @@ def _require_brightness(value: Any, name: str) -> int:
 
 def resolve_native_user_ids(config: dict[str, Any]) -> frozenset[str]:
     """Resolve HA user ids whose light changes count as automations, not manual."""
-    raw = config.get(CONF_GLOBAL, {}).get(CONF_NATIVE_USER_IDS, [])
+    global_config = config.get(CONF_GLOBAL, {})
+    if not isinstance(global_config, dict):
+        raise ValueError("global must be an object")
+    raw = global_config.get(CONF_NATIVE_USER_IDS, [])
     if isinstance(raw, str):
         raw = raw.split(",")
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
@@ -222,6 +225,8 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
     # Validates the global allowlist too, so config-save rejects bad values.
     resolve_native_user_ids(config)
     global_config = config.get(CONF_GLOBAL, {})
+    if not isinstance(global_config, dict):
+        raise ValueError("global must be an object")
     light_configs = config.get(CONF_LIGHTS, [])
     if not isinstance(light_configs, list) or not light_configs:
         return []

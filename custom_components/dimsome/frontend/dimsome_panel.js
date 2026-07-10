@@ -165,6 +165,10 @@ const defaultFixedTimeForPath = (path) => (
   path.includes("dim_schedule") ? "20:00:00" : "06:00:00"
 );
 
+const defaultCivilEventForPath = (path) => (
+  path.includes("dim_schedule") ? "civil_dusk" : "civil_dawn"
+);
+
 const formatRelative = (target, now) => {
   let secs = Math.round((target - now) / 1000);
   if (secs < 0) secs = 0;
@@ -346,20 +350,32 @@ class DimsomePanel extends HTMLElement {
     this._render();
   }
 
-  _refreshLiveBits() {
+  async _refreshLiveBits() {
     if (!this._loaded || !this._configured) return;
-    const hero = this.shadowRoot?.querySelector(".hero-card");
-    if (!hero) return;
-    const wrapper = document.createElement("div");
-    wrapper.innerHTML = this._renderHero();
-    const fresh = wrapper.firstElementChild;
-    if (fresh) {
-      hero.replaceWith(fresh);
-      // Hydrate only the replaced subtree: re-hydrating the whole shadow root
-      // would reset every input to its render-time value, visually undoing
-      // unsaved edits that are still pending in this._config.
-      this._hydrateNativeComponents(fresh);
+    try {
+      const result = await this._hass.callWS({ type: "dimsome/config" });
+      this._lightStates = result.light_states || {};
+      this._runtime = result.runtime || {};
+    } catch (_) {
+      return;
     }
+    const replace = (current, html) => {
+      if (!current) return;
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = html;
+      const fresh = wrapper.firstElementChild;
+      if (fresh) {
+        current.replaceWith(fresh);
+        this._hydrateNativeComponents(fresh);
+      }
+    };
+    replace(this.shadowRoot?.querySelector(".hero-card"), this._renderHero());
+    this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
+      const index = this._config.lights.findIndex(
+        (light) => light.entity_id === card.dataset.entityId
+      );
+      if (index >= 0) replace(card, this._renderLight(this._config.lights[index], index));
+    });
   }
 
   _handleClick(event) {
@@ -438,7 +454,7 @@ class DimsomePanel extends HTMLElement {
       schedule.at ||= defaultFixedTimeForPath(schedulePath);
       delete schedule.event;
     } else {
-      schedule.event ||= "civil_dusk";
+      schedule.event ||= defaultCivilEventForPath(schedulePath);
       delete schedule.at;
     }
   }
@@ -803,7 +819,7 @@ class DimsomePanel extends HTMLElement {
           ` : `
             ${this._renderField("Sun Event", selectHtml({
               path: `${path}.event`,
-              value: schedule.event || "civil_dusk",
+              value: schedule.event || defaultCivilEventForPath(path),
               options: SUN_EVENTS,
             }))}
           `}

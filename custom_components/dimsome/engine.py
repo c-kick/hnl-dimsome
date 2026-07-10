@@ -10,7 +10,7 @@ tests).  Everything here is a pure function of ``(config, now, civil_lookup)``.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from .models import (
     ColorMode,
@@ -30,6 +30,13 @@ COLOR_TEMP_TOLERANCE = 50
 
 #: Resolve a civil sun event on a calendar date to its concrete datetime.
 CivilLookup = Callable[[SunEvent, date], "datetime | None"]
+
+
+def _add_duration(value: datetime, duration: timedelta) -> datetime:
+    """Add elapsed time without wall-clock DST arithmetic."""
+    if value.tzinfo is None:
+        return value + duration
+    return datetime.fromtimestamp(value.timestamp() + duration.total_seconds(), tz=value.tzinfo)
 
 
 def brightness_pct_to_ha(value: int) -> int:
@@ -70,7 +77,31 @@ def schedule_start(
     """Return the concrete start datetime for a schedule on day."""
     if schedule.type is ScheduleType.FIXED_TIME:
         assert schedule.at is not None
-        return datetime.combine(day.date(), parse_time(schedule.at), tzinfo=day.tzinfo)
+        naive = datetime.combine(day.date(), parse_time(schedule.at))
+        if day.tzinfo is None:
+            return naive
+        candidates = [naive.replace(tzinfo=day.tzinfo, fold=fold) for fold in (0, 1)]
+        valid = [
+            candidate
+            for candidate in candidates
+            if datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
+                tzinfo=None
+            )
+            == naive
+        ]
+        if valid:
+            return min(valid, key=lambda candidate: candidate.fold)
+        normalized = min(
+            candidates,
+            key=lambda candidate: (
+                datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
+                    tzinfo=None
+                )
+                < naive,
+                candidate.astimezone(UTC),
+            ),
+        )
+        return datetime.fromtimestamp(normalized.timestamp(), tz=day.tzinfo)
     assert schedule.event is not None
     return civil_lookup(schedule.event, day.date())
 
@@ -90,7 +121,7 @@ def candidate_windows(
                 RampWindow(
                     sequence=SequenceKind.DIM,
                     start=dim_start,
-                    end=dim_start + config.ramp_duration,
+                    end=_add_duration(dim_start, config.ramp_duration),
                 )
             )
         brighten_start = schedule_start(config.brighten_schedule, day, civil_lookup)
@@ -99,10 +130,10 @@ def candidate_windows(
                 RampWindow(
                     sequence=SequenceKind.BRIGHTEN,
                     start=brighten_start,
-                    end=brighten_start + config.ramp_duration,
+                    end=_add_duration(brighten_start, config.ramp_duration),
                 )
             )
-    return sorted(windows, key=lambda window: window.start)
+    return sorted(windows, key=lambda window: window.start.timestamp())
 
 
 def active_window(
@@ -116,7 +147,7 @@ def active_window(
     most recently started window wins.
     """
     for window in reversed(candidate_windows(config, now, civil_lookup)):
-        if window.start <= now <= window.end:
+        if window.start.timestamp() <= now.timestamp() <= window.end.timestamp():
             return window
     return None
 
@@ -130,7 +161,7 @@ def next_window_start(
     starts = [
         window.start
         for window in candidate_windows(config, now, civil_lookup)
-        if window.start > now
+        if window.start.timestamp() > now.timestamp()
     ]
     return min(starts, default=None)
 
@@ -144,7 +175,7 @@ def _last_completed_window(
     previous = [
         window
         for window in candidate_windows(config, now, civil_lookup)
-        if window.end <= now
+        if window.end.timestamp() <= now.timestamp()
     ]
     return previous[-1] if previous else None
 
@@ -176,7 +207,9 @@ def interpolate(start: int, end: int, progress: float) -> int:
 
 def target_for_window(config: ResolvedLightConfig, window: RampWindow, now: datetime) -> LightTarget:
     """Compute the expected target for a ramp window."""
-    progress = (now - window.start) / (window.end - window.start)
+    progress = (now.timestamp() - window.start.timestamp()) / (
+        window.end.timestamp() - window.start.timestamp()
+    )
     if window.sequence is SequenceKind.DIM:
         brightness = interpolate(
             config.max_brightness_pct, config.min_brightness_pct, progress
