@@ -92,6 +92,7 @@ class DimsomeController:
         self._refresh_unsub: Any | None = None
         self._automation_context_ids: list[str] = []
         self._turn_on_tasks: set[asyncio.Task] = set()
+        self._stopped = False
 
     def _civil_lookup(self, event: SunEvent, day: date) -> datetime | None:
         """Resolve a civil sun event on a calendar date via HA's astral data."""
@@ -123,6 +124,7 @@ class DimsomeController:
 
     async def async_stop(self) -> None:
         """Stop listeners and pending timers."""
+        self._stopped = True
         if self._ramp_unsub is not None:
             self._ramp_unsub()
             self._ramp_unsub = None
@@ -133,14 +135,18 @@ class DimsomeController:
             self._refresh_unsub()
             self._refresh_unsub = None
         for runtime in self.lights.values():
+            runtime.pending_target = None
             if runtime.grace_unsub is not None:
                 runtime.grace_unsub()
                 runtime.grace_unsub = None
-        for task in self._turn_on_tasks:
+        tasks = list(self._turn_on_tasks)
+        for task in tasks:
             task.cancel()
         self._turn_on_tasks.clear()
         while self._unsubs:
             self._unsubs.pop()()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def async_resume(self, entity_ids: Collection[str] | None = None) -> None:
         """Resume Dimsome control for selected lights."""
@@ -231,10 +237,14 @@ class DimsomeController:
 
     async def async_tick(self, *_: Any) -> None:
         """Apply current targets and manage the active ramp timer."""
+        if self._stopped:
+            return
         now = dt_util.now()
         any_active = False
         next_start = None
         for runtime in self.lights.values():
+            if self._stopped:
+                return
             if not runtime.config.enabled:
                 runtime.last_target = None
                 self._record_decision(runtime, "disabled", now)
@@ -295,6 +305,8 @@ class DimsomeController:
                 continue
             self._record_decision(runtime, "applied_target", now)
 
+        if self._stopped:
+            return
         if any_active:
             self._cancel_wake_timer()
         if any_active and self._ramp_unsub is None:
@@ -319,9 +331,9 @@ class DimsomeController:
     ) -> None:
         """Schedule a one-shot tick for the next known ramp start."""
         self._cancel_wake_timer()
-        if next_start is None:
+        if next_start is None or self._stopped:
             return
-        delay = max(0.0, (next_start - now).total_seconds())
+        delay = max(0.0, next_start.timestamp() - now.timestamp())
         self._wake_unsub = async_call_later(self.hass, delay, self.async_tick)
 
     @callback
@@ -329,7 +341,7 @@ class DimsomeController:
         """Handle controlled light state changes."""
         entity_id = event.data[ATTR_ENTITY_ID]
         runtime = self.lights[entity_id]
-        if not runtime.config.enabled:
+        if self._stopped or not runtime.config.enabled:
             return
         old_state: State | None = event.data.get("old_state")
         new_state: State | None = event.data.get("new_state")
@@ -344,6 +356,8 @@ class DimsomeController:
             )
             and new_state.state == STATE_ON
         ):
+            if not self._can_apply_target(runtime):
+                return
             runtime.stood_down = False
             runtime.stood_down_window = None
             runtime.last_target = None
@@ -354,10 +368,14 @@ class DimsomeController:
         if new_state.state != STATE_ON:
             runtime.last_target = None
             window = active_window(runtime.config, now, self._civil_lookup)
-            if window is not None and should_stand_down_for_context(
-                new_state.context,
-                set(self._automation_context_ids),
-                self._native_user_ids,
+            if (
+                new_state.state == STATE_OFF
+                and window is not None
+                and should_stand_down_for_context(
+                    new_state.context,
+                    set(self._automation_context_ids),
+                    self._native_user_ids,
+                )
             ):
                 runtime.stood_down = True
                 runtime.stood_down_window = window
@@ -377,6 +395,8 @@ class DimsomeController:
                 runtime.stood_down = True
                 runtime.stood_down_window = window
                 self._schedule_grace_resume(runtime)
+                return
+            if not self._can_apply_target(runtime):
                 return
             runtime.stood_down = False
             runtime.stood_down_window = None
@@ -424,6 +444,8 @@ class DimsomeController:
         state = self.hass.states.get(runtime.config.entity_id)
         if state is None or state.state != STATE_ON:
             return
+        if not self._can_apply_target(runtime):
+            return
         now = dt_util.now()
         target = target_for_now(runtime.config, now, self._civil_lookup)
         if target is not None:
@@ -433,11 +455,13 @@ class DimsomeController:
     async def _async_verify_turn_on_target(self, runtime: LightRuntime) -> None:
         """Reapply turn-on targets that were lost to device restore timing."""
         await asyncio.sleep(IGNORE_UPDATE_WINDOW.total_seconds())
+        if not self._can_apply_target(runtime):
+            return
         now = dt_util.now()
         # Verify against the current target: during a ramp it has moved on
         # since turn-on, and the moved-on value is what the light should show.
         current = target_for_now(runtime.config, now, self._civil_lookup)
-        if current is None or runtime.stood_down:
+        if current is None:
             return
         state = self.hass.states.get(runtime.config.entity_id)
         if state is None or state.state != STATE_ON:
@@ -459,10 +483,28 @@ class DimsomeController:
         runtime.last_target = None
         await self._async_apply_target(runtime, current)
 
+    def _can_apply_target(self, runtime: LightRuntime) -> bool:
+        """Recheck permission after waits without extending an old override."""
+        if self._stopped or not runtime.config.enabled:
+            return False
+        if not runtime.stood_down:
+            return True
+        window = active_window(runtime.config, dt_util.now(), self._civil_lookup)
+        return not should_skip_for_manual_override(
+            stood_down=runtime.stood_down, window=window
+        ) or should_clear_manual_override_for_window(
+            stood_down=runtime.stood_down,
+            stood_down_window=runtime.stood_down_window,
+            window=window,
+        )
+
     async def _async_apply_target(
         self, runtime: LightRuntime, target: LightTarget
     ) -> None:
         """Apply a target with per-light backpressure."""
+        if not self._can_apply_target(runtime):
+            runtime.pending_target = None
+            return
         if runtime.last_target == target:
             return
         if runtime.in_flight:
@@ -482,7 +524,11 @@ class DimsomeController:
         context = Context()
         runtime.last_apply_context_id = context.id
         try:
-            await self._async_call_light(runtime, target, context)
+            applied = await self._async_call_light(runtime, target, context)
+            if not applied or not self._can_apply_target(runtime):
+                runtime.last_target = None
+                runtime.pending_target = None
+                return
             runtime.last_target = target
             runtime.expected_target = target
             runtime.ignore_updates_until = dt_util.now() + IGNORE_UPDATE_WINDOW
@@ -498,30 +544,32 @@ class DimsomeController:
 
     async def _async_call_light(
         self, runtime: LightRuntime, target: LightTarget, context: Context
-    ) -> None:
+    ) -> bool:
         """Call light.turn_on for brightness and optional color."""
         base_data: dict[str, Any] = {
             ATTR_ENTITY_ID: runtime.config.entity_id,
             ATTR_BRIGHTNESS: brightness_pct_to_ha(target.brightness_pct),
         }
         color_data = color_service_data(target)
-        if color_data and runtime.config.split_turn_on_calls:
-            for index, data in enumerate(
-                split_turn_on_service_data(runtime.config.entity_id, target)
-            ):
-                if index > 0:
-                    await asyncio.sleep(SPLIT_TURN_ON_DELAY)
-                await self.hass.services.async_call(
-                    LIGHT_DOMAIN, "turn_on", data, blocking=True, context=context
-                )
-            return
-        await self.hass.services.async_call(
-            LIGHT_DOMAIN,
-            "turn_on",
-            {**base_data, **color_data},
-            blocking=True,
-            context=context,
+        payloads = (
+            split_turn_on_service_data(runtime.config.entity_id, target)
+            if color_data and runtime.config.split_turn_on_calls
+            else [{**base_data, **color_data}]
         )
+        for index, data in enumerate(payloads):
+            if index > 0:
+                await asyncio.sleep(SPLIT_TURN_ON_DELAY)
+            state = self.hass.states.get(runtime.config.entity_id)
+            if (
+                not self._can_apply_target(runtime)
+                or state is None
+                or state.state != STATE_ON
+            ):
+                return False
+            await self.hass.services.async_call(
+                LIGHT_DOMAIN, "turn_on", data, blocking=True, context=context
+            )
+        return True
 
     def _schedule_grace_resume(self, runtime: LightRuntime) -> None:
         """Schedule optional automatic resume after a manual override."""

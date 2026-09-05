@@ -293,11 +293,21 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                 min_color=parse_color(light.get(CONF_MIN_COLOR)),
                 max_color=parse_color(light.get(CONF_MAX_COLOR)),
                 dim_schedule=parse_schedule(
-                    light.get(CONF_DIM_SCHEDULE, global_config[CONF_DIM_SCHEDULE])
+                    light.get(
+                        CONF_DIM_SCHEDULE,
+                        global_config.get(CONF_DIM_SCHEDULE, {
+                            "type": ScheduleType.CIVIL_SUN,
+                            "event": SunEvent.CIVIL_DUSK,
+                        }),
+                    )
                 ),
                 brighten_schedule=parse_schedule(
                     light.get(
-                        CONF_BRIGHTEN_SCHEDULE, global_config[CONF_BRIGHTEN_SCHEDULE]
+                        CONF_BRIGHTEN_SCHEDULE,
+                        global_config.get(CONF_BRIGHTEN_SCHEDULE, {
+                            "type": ScheduleType.CIVIL_SUN,
+                            "event": SunEvent.CIVIL_DAWN,
+                        }),
                     )
                 ),
                 ramp_duration=ramp_duration,

@@ -178,6 +178,7 @@ def test_manual_turn_on_during_ramp_stands_down_without_applying(monkeypatch) ->
         )
     )
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._civil_lookup = lambda *_: None
     controller._automation_context_ids = []
@@ -216,6 +217,7 @@ def test_user_update_during_in_flight_call_stands_down(monkeypatch) -> None:
     runtime.in_flight = True
     runtime.expected_target = LightTarget(50)
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._civil_lookup = lambda *_: None
     controller._automation_context_ids = []
@@ -245,9 +247,10 @@ def test_user_update_during_in_flight_call_stands_down(monkeypatch) -> None:
 
 def test_failed_apply_discards_stale_pending_target() -> None:
     """A failed call must not replay a target queued by an overlapping tick."""
-    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test", enabled=True))
     runtime.last_target = LightTarget(50)
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     calls = []
     failed = True
 
@@ -258,6 +261,7 @@ def test_failed_apply_discards_stale_pending_target() -> None:
             await controller._async_apply_target(call_runtime, LightTarget(49))
             failed = False
             raise RuntimeError("simulated service failure")
+        return True
 
     controller._async_call_light = fake_call
 
@@ -274,7 +278,8 @@ def test_failed_apply_discards_stale_pending_target() -> None:
 def test_resume_clears_cached_targets(monkeypatch) -> None:
     """Resume must force a fresh apply even if the previous command was cached."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
-    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    controller._stopped = False
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test", enabled=True))
     runtime.stood_down = True
     runtime.stood_down_window = SimpleNamespace()
     runtime.last_target = LightTarget(50)
@@ -299,7 +304,8 @@ def test_resume_clears_cached_targets(monkeypatch) -> None:
 def test_resume_with_empty_selection_does_not_resume_all(monkeypatch) -> None:
     """An explicit empty selection is a no-op, not an alias for every light."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
-    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    controller._stopped = False
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test", enabled=True))
     runtime.stood_down = True
     controller.lights = {"light.test": runtime}
     tick_calls = []
@@ -345,7 +351,8 @@ def test_resume_service_empty_entity_list_is_noop() -> None:
 def test_turn_on_verification_reapplies_mismatched_target(monkeypatch) -> None:
     """Turn-on verification must force a retry when restore timing wins."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
-    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    controller._stopped = False
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test", enabled=True))
     target = LightTarget(50)
     runtime.last_target = target
     controller.hass = SimpleNamespace(
@@ -378,7 +385,8 @@ def test_turn_on_verification_does_not_revert_manual_plateau_change(
 ) -> None:
     """Plateau-time manual changes after turn-on must not be defended."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
-    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test"))
+    controller._stopped = False
+    runtime = LightRuntime(config=SimpleNamespace(entity_id="light.test", enabled=True))
     target = LightTarget(30)
     controller.hass = SimpleNamespace(
         states=SimpleNamespace(
@@ -412,8 +420,9 @@ def test_turn_on_verification_does_not_revert_manual_plateau_change(
 def test_turn_on_waits_settle_delay_before_computing_target(monkeypatch) -> None:
     """Turn-on handling should wait for device on transitions before targeting."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     runtime = LightRuntime(
-        config=SimpleNamespace(entity_id="light.test", settle_delay=timedelta(seconds=2))
+        config=SimpleNamespace(entity_id="light.test", enabled=True, settle_delay=timedelta(seconds=2))
     )
     controller.hass = SimpleNamespace(
         states=SimpleNamespace(
@@ -457,8 +466,9 @@ def test_turn_on_handler_does_not_relight_light_turned_off_during_settle_delay(
 ) -> None:
     """A light switched off during settle delay must stay off."""
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     runtime = LightRuntime(
-        config=SimpleNamespace(entity_id="light.test", settle_delay=timedelta(seconds=2))
+        config=SimpleNamespace(entity_id="light.test", enabled=True, settle_delay=timedelta(seconds=2))
     )
     controller.hass = SimpleNamespace(
         states=SimpleNamespace(
@@ -496,6 +506,7 @@ def test_initial_on_state_during_ramp_is_not_manual_override(monkeypatch) -> Non
         )
     )
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._automation_context_ids = []
     controller._turn_on_tasks = set()
@@ -551,6 +562,7 @@ def test_own_clamped_service_echo_does_not_stand_down_ramp(monkeypatch) -> None:
     runtime.ignore_updates_until = now + timedelta(seconds=10)
     runtime.last_apply_context_id = "dimsome-call"
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._automation_context_ids = []
     controller._native_user_ids = frozenset()
@@ -585,6 +597,7 @@ def test_tick_applies_dusk_ramp_from_civil_lookup(monkeypatch) -> None:
     config = _civil_config()
     runtime = LightRuntime(config=config)
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._ramp_unsub = None
     controller._wake_unsub = None
@@ -623,6 +636,7 @@ def test_tick_schedules_wake_from_upcoming_civil_dusk(monkeypatch) -> None:
     config = _civil_config(min_color=None, max_color=None)
     runtime = LightRuntime(config=config)
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._ramp_unsub = None
     controller._wake_unsub = None
@@ -669,6 +683,7 @@ def test_tick_records_last_decision_for_diagnostics(monkeypatch) -> None:
         )
     )
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.test": runtime}
     controller._ramp_unsub = object()
     controller._wake_unsub = None
@@ -697,6 +712,7 @@ def test_one_failing_light_does_not_starve_later_lights_or_timers(monkeypatch) -
         config=_civil_config(entity_id="light.fine", dim_schedule=dim_schedule)
     )
     controller = coordinator.DimsomeController.__new__(coordinator.DimsomeController)
+    controller._stopped = False
     controller.lights = {"light.broken": broken, "light.fine": fine}
     controller._ramp_unsub = None
     controller._wake_unsub = None

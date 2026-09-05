@@ -122,6 +122,34 @@ def test_resolves_global_defaults_and_per_light_overrides() -> None:
     assert configs[0].brighten_schedule.event is SunEvent.CIVIL_DAWN
 
 
+def test_per_light_schedules_do_not_require_unused_globals() -> None:
+    configs = resolve_light_configs({"lights": [{
+        "entity_id": "light.test",
+        "min_brightness_pct": 10,
+        "max_brightness_pct": 80,
+        "dim_schedule": {"type": "fixed_time", "at": "22:00"},
+        "brighten_schedule": {"type": "fixed_time", "at": "06:00"},
+    }]})
+
+    assert configs[0].dim_schedule.at == "22:00"
+    assert configs[0].brighten_schedule.at == "06:00"
+
+
+def test_missing_schedules_default_to_civil_sun() -> None:
+    configs = resolve_light_configs({"lights": [{
+        "entity_id": "light.test",
+        "min_brightness_pct": 10,
+        "max_brightness_pct": 80,
+    }]})
+
+    assert configs[0].dim_schedule == ScheduleConfig(
+        ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK
+    )
+    assert configs[0].brighten_schedule == ScheduleConfig(
+        ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN
+    )
+
+
 def test_resolves_turn_on_settle_delay_default_and_per_light_override() -> None:
     """Settle delay defaults to 500 ms unless overridden per light."""
     configs = resolve_light_configs(
