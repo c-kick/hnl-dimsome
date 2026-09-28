@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -370,6 +371,50 @@ def test_civil_dawn_brighten_ramps_up_from_minimum() -> None:
     assert target_for_now(
         config, datetime(2026, 5, 31, 6, 0, tzinfo=TZ), lookup
     ).brightness_pct == 80
+
+
+def test_brighten_levels_shape_dawn_ramp_and_day_plateau() -> None:
+    """Separate brighten levels drive the dawn ramp and the day that follows."""
+    config = replace(
+        fixed_config(), brighten_min_brightness_pct=40, brighten_max_brightness_pct=100
+    )
+
+    # Dawn ramp 06:00-07:00 runs 40 -> 100 instead of 10 -> 80.
+    assert target_for_now(config, datetime(2026, 5, 5, 6, 0, tzinfo=TZ), no_civil).brightness_pct == 40
+    assert target_for_now(config, datetime(2026, 5, 5, 6, 30, tzinfo=TZ), no_civil).brightness_pct == 70
+    assert target_for_now(config, datetime(2026, 5, 5, 12, 0, tzinfo=TZ), no_civil).brightness_pct == 100
+    # Dusk ramp and night keep the regular levels.
+    assert target_for_now(config, datetime(2026, 5, 5, 22, 30, tzinfo=TZ), no_civil).brightness_pct == 45
+    assert target_for_now(config, datetime(2026, 5, 6, 1, 0, tzinfo=TZ), no_civil).brightness_pct == 10
+
+
+def test_brighten_levels_fall_back_independently() -> None:
+    """Setting only one brighten level keeps the other at the regular value."""
+    config = replace(fixed_config(), brighten_min_brightness_pct=30)
+
+    assert config.brighten_min_pct == 30
+    assert config.brighten_max_pct == 80
+
+
+def test_resolves_and_validates_brighten_levels() -> None:
+    """Brighten levels are optional, range-checked and must not invert."""
+    def resolve(**levels: object) -> ResolvedLightConfig:
+        return resolve_light_configs({"lights": [{
+            "entity_id": "light.test",
+            "min_brightness_pct": 10,
+            "max_brightness_pct": 80,
+            **levels,
+        }]})[0]
+
+    assert resolve().brighten_min_brightness_pct is None
+    assert resolve(brighten_min_brightness_pct="").brighten_min_brightness_pct is None
+    resolved = resolve(brighten_min_brightness_pct=40, brighten_max_brightness_pct=100)
+    assert (resolved.brighten_min_pct, resolved.brighten_max_pct) == (40, 100)
+    with pytest.raises(ValueError, match="brighten_max_brightness_pct"):
+        resolve(brighten_max_brightness_pct=101)
+    # Only the minimum is set, above the regular maximum it would ramp to.
+    with pytest.raises(ValueError, match="brighten minimum"):
+        resolve(brighten_min_brightness_pct=90)
 
 
 def test_civil_day_is_high_plateau_after_dawn_ramp() -> None:

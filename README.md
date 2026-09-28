@@ -70,6 +70,7 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 
 - **Light Entity** — the light to control.
 - **Minimum / Maximum Brightness** — night and day targets, as a percentage from `1` to `100` (converted internally to Home Assistant's `1`–`255` scale).
+- **Separate dawn levels** (optional) — a different minimum/maximum for the brighten ramp, e.g. a shallower, brighter morning. The panel shows a 24-hour brightness profile per light so the effect is visible before saving.
 - **Adjust Color Temperature** — optional minimum/maximum `color_temp_kelvin` targets (color support is intentionally limited to color temperature).
 - **Split Brightness & Color Calls**, **Apply On Recovery** — per-light overrides of the global toggles.
 - **Settle Delay** — wait after a light turns on before applying its target.
@@ -133,6 +134,7 @@ dimsome:
     - entity_id: light.hallway
       min_brightness_pct: 20
       max_brightness_pct: 100
+      brighten_min_brightness_pct: 50      # optional: brighter start at dawn
       ramp_duration: "00:30:00"
       override_resume_mode: after_grace_period
       override_grace_period: "00:15:00"
@@ -143,6 +145,8 @@ dimsome:
 ```
 
 A schedule is either `{ type: fixed_time, at: "HH:MM" }` or `{ type: civil_sun, event: civil_dawn | civil_dusk }`.
+
+`brighten_min_brightness_pct` and `brighten_max_brightness_pct` are optional per-light levels for the brighten (dawn) ramp. Each falls back to `min_brightness_pct` / `max_brightness_pct` when unset. The brighten ramp runs from the brighten minimum to the brighten maximum, and the brighten maximum holds through the day. The dim ramp always runs from `max_brightness_pct` to `min_brightness_pct`, which also holds through the night. If the night level and the dawn start level differ, the light steps to the dawn start level when the brighten ramp begins.
 
 ## Development
 

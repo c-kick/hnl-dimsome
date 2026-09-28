@@ -214,6 +214,109 @@ const findElevationCrossing = (lat, lon, start, end, threshold, direction) => {
   return null;
 };
 
+const BRIGHTEN_LEVEL_KEYS = ["brighten_min_brightness_pct", "brighten_max_brightness_pct"];
+
+const hasBrightenLevels = (light) => BRIGHTEN_LEVEL_KEYS.some(
+  (key) => light[key] !== undefined && light[key] !== null && light[key] !== ""
+);
+
+// Effective levels, mirroring ResolvedLightConfig.brighten_min_pct/max_pct.
+const brightnessLevels = (light) => {
+  const min = clampPct(light.min_brightness_pct, 10);
+  const max = clampPct(light.max_brightness_pct, 80);
+  const pick = (key, fallback) => (
+    light[key] === undefined || light[key] === null || light[key] === ""
+      ? fallback
+      : clampPct(light[key], fallback)
+  );
+  const hasColor = Boolean(light.min_color && light.max_color);
+  return {
+    min,
+    max,
+    briMin: pick("brighten_min_brightness_pct", min),
+    briMax: pick("brighten_max_brightness_pct", max),
+    kMin: hasColor ? Number(light.min_color.value) || 2200 : null,
+    kMax: hasColor ? Number(light.max_color.value) || 4000 : null,
+  };
+};
+
+// Sample the target brightness (v) and color temperature (k, null without
+// color) over the day starting at dayStart, using the same rules as the
+// engine: the most recently started active ramp wins, outside ramps the last
+// finished ramp's end state holds, and color follows ramp progress.
+const brightnessProfile = (levels, windows, dayStart) => {
+  const DAY = 86_400_000;
+  const ramps = [];
+  for (const shift of [-DAY, 0]) {
+    if (windows.briStart) {
+      ramps.push({
+        s: windows.briStart.getTime() + shift,
+        e: windows.briEnd.getTime() + shift,
+        from: levels.briMin,
+        to: levels.briMax,
+        kFrom: levels.kMin,
+        kTo: levels.kMax,
+      });
+    }
+    if (windows.dimStart) {
+      ramps.push({
+        s: windows.dimStart.getTime() + shift,
+        e: windows.dimEnd.getTime() + shift,
+        from: levels.max,
+        to: levels.min,
+        kFrom: levels.kMax,
+        kTo: levels.kMin,
+      });
+    }
+  }
+  if (!ramps.length) return [];
+  ramps.sort((a, b) => a.s - b.s);
+  const lerp = (a, b, p) => (a === null ? null : a + (b - a) * p);
+  const stateAt = (t) => {
+    let active = null;
+    let last = null;
+    for (const ramp of ramps) {
+      if (ramp.s <= t && t <= ramp.e) active = ramp;
+      if (ramp.e <= t) last = ramp;
+    }
+    if (active) {
+      const progress = (t - active.s) / (active.e - active.s);
+      return {
+        v: lerp(active.from, active.to, progress),
+        k: lerp(active.kFrom, active.kTo, progress),
+      };
+    }
+    return last ? { v: last.to, k: last.kTo } : null;
+  };
+  const start = dayStart.getTime();
+  const samples = [];
+  for (let t = start; t <= start + DAY; t += 3 * 60_000) {
+    const state = stateAt(t);
+    if (state !== null) samples.push({ t, ...state });
+  }
+  return samples;
+};
+
+// Approximate display color of a color temperature (Tanner Helland's fit).
+const kelvinToRgb = (kelvin) => {
+  const t = Math.min(40000, Math.max(1000, kelvin)) / 100;
+  let r;
+  let g;
+  let b;
+  if (t <= 66) {
+    r = 255;
+    g = 99.4708025861 * Math.log(t) - 161.1195681661;
+  } else {
+    r = 329.698727446 * Math.pow(t - 60, -0.1332047592);
+    g = 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  }
+  if (t >= 66) b = 255;
+  else if (t <= 19) b = 0;
+  else b = 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  const c = (v) => Math.round(Math.min(255, Math.max(0, v)));
+  return `rgb(${c(r)}, ${c(g)}, ${c(b)})`;
+};
+
 const timeOfDayToday = (timeStr, baseDate) => {
   const parts = String(timeStr || "00:00").split(":").map(Number);
   const d = new Date(baseDate);
@@ -241,6 +344,9 @@ class DimsomePanel extends HTMLElement {
     this._addError = "";
     this._pendingScrollToTop = false;
     this._tickHandle = null;
+    this._savedJson = null;
+    this._saveError = "";
+    this._expanded = new Map();
   }
 
   set hass(hass) {
@@ -299,6 +405,7 @@ class DimsomePanel extends HTMLElement {
       const result = await this._hass.callWS({ type: "dimsome/config" });
       this._configured = result.configured;
       this._config = this._normalizeConfig(result.config || DEFAULT_CONFIG);
+      this._savedJson = JSON.stringify(this._config);
       this._lightStates = result.light_states || {};
       this._runtime = result.runtime || {};
       this._error = "";
@@ -315,8 +422,20 @@ class DimsomePanel extends HTMLElement {
     };
   }
 
+  _canSave() {
+    // save_config is admin-only on the backend; the HA user object may be
+    // missing briefly on first load, so only block when it says non-admin.
+    return this._hass?.user?.is_admin !== false;
+  }
+
   async _saveConfig() {
+    if (!this._canSave()) {
+      this._saveError = "Only administrators can save Dimsome settings. This Home Assistant account isn't an admin.";
+      this._render();
+      return;
+    }
     this._saving = true;
+    this._saveError = "";
     this._error = "";
     this._message = "Saving…";
     this._render();
@@ -327,6 +446,11 @@ class DimsomePanel extends HTMLElement {
       await this._loadConfig();
     } catch (error) {
       this._error = error.message || String(error);
+      // Also show the failure in the save bar: the page-top alert is usually
+      // scrolled out of view when saving from the bar.
+      this._saveError = error.code === "unauthorized"
+        ? "Save refused: this Home Assistant account isn't an admin."
+        : `Save failed: ${this._error}`;
       this._message = "";
     }
     this._saving = false;
@@ -340,9 +464,7 @@ class DimsomePanel extends HTMLElement {
       await this._hass.callService("dimsome", "resume", data);
       this._error = "";
       this._message = entityId ? `Resumed ${entityId}.` : "Resumed all Dimsome lights.";
-      this._loaded = false;
-      await this._loadConfig();
-      return;
+      await this._refreshLiveBits();
     } catch (error) {
       this._error = error.message || String(error);
       this._message = "";
@@ -370,12 +492,61 @@ class DimsomePanel extends HTMLElement {
       }
     };
     replace(this.shadowRoot?.querySelector(".hero-card"), this._renderHero());
+    // Only touch the live bits of each card; replacing whole cards would
+    // collapse open panels and steal focus from inputs.
     this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
-      const index = this._config.lights.findIndex(
-        (light) => light.entity_id === card.dataset.entityId
-      );
-      if (index >= 0) replace(card, this._renderLight(this._config.lights[index], index));
+      const light = this._config.lights[Number(card.dataset.index)];
+      if (!light) return;
+      const status = card.querySelector(".status-line");
+      if (status) status.textContent = this._statusText(light);
+      const chips = card.querySelector(".light-chips");
+      if (chips) chips.innerHTML = this._renderChips(light);
     });
+    this._refreshProfiles();
+  }
+
+  _refreshProfiles(index = null) {
+    this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
+      const cardIndex = Number(card.dataset.index);
+      if (index !== null && cardIndex !== index) return;
+      const light = this._config.lights[cardIndex];
+      const profile = card.querySelector(".profile");
+      if (!light || !profile) return;
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = this._renderProfile(light, cardIndex);
+      profile.replaceWith(wrapper.firstElementChild);
+      const advanced = card.querySelector("ha-expansion-panel.light-advanced");
+      if (advanced) advanced.secondary = this._advancedSummary(light);
+    });
+  }
+
+  _advancedSummary(light) {
+    return light.min_color && light.max_color
+      ? `${light.min_color.value ?? 2200} K → ${light.max_color.value ?? 4000} K`
+      : "Entity, color temperature, settle delay, recovery";
+  }
+
+  _isDirty() {
+    return this._savedJson !== null && JSON.stringify(this._config) !== this._savedJson;
+  }
+
+  _updateDirtyUi() {
+    const bar = this.shadowRoot?.querySelector(".save-bar");
+    if (bar) bar.hidden = !this._isDirty();
+  }
+
+  _discardChanges() {
+    if (this._savedJson === null) return;
+    this._config = JSON.parse(this._savedJson);
+    this._error = "";
+    this._saveError = "";
+    this._message = "";
+    this._render();
+  }
+
+  _reload() {
+    if (this._isDirty() && !window.confirm("Discard unsaved changes and reload?")) return;
+    this._loadConfig();
   }
 
   _handleClick(event) {
@@ -385,7 +556,8 @@ class DimsomePanel extends HTMLElement {
     const action = button.dataset.action;
     const index = Number(button.dataset.index);
     if (action === "save") this._saveConfig();
-    if (action === "reload") this._loadConfig();
+    if (action === "reload") this._reload();
+    if (action === "discard") this._discardChanges();
     if (action === "open-add-dialog") this._openAddDialog();
     if (action === "cancel-add") this._closeAddDialog();
     if (action === "confirm-add") this._confirmAdd();
@@ -412,7 +584,24 @@ class DimsomePanel extends HTMLElement {
       }
       setPath(this._config, control.dataset.path, value);
       this._normalizeScheduleForPath(control.dataset.path);
-      if (control.dataset.renderOnChange || control.dataset.path.endsWith(".type")) this._render();
+      if (control.dataset.renderOnChange || control.dataset.path.endsWith(".type")) {
+        this._render();
+        return;
+      }
+      const lightMatch = control.dataset.path.match(/^lights\.(\d+)\./);
+      this._refreshProfiles(lightMatch ? Number(lightMatch[1]) : null);
+      this._updateDirtyUi();
+      return;
+    }
+    if ("brightenToggle" in control.dataset) {
+      const light = this._config.lights[Number(control.dataset.brightenToggle)];
+      if (control.checked) {
+        light.brighten_min_brightness_pct = light.min_brightness_pct ?? 10;
+        light.brighten_max_brightness_pct = light.max_brightness_pct ?? 80;
+      } else {
+        BRIGHTEN_LEVEL_KEYS.forEach((key) => delete light[key]);
+      }
+      this._render();
       return;
     }
     if ("colorToggle" in control.dataset) {
@@ -567,9 +756,18 @@ class DimsomePanel extends HTMLElement {
       });
     }
 
+    // Remember which panels are open so re-renders don't collapse them.
+    root.querySelectorAll("ha-expansion-panel[data-key]").forEach((panel) => {
+      if (panel._dimsomeBound) return;
+      panel._dimsomeBound = true;
+      panel.addEventListener("expanded-changed", (event) => {
+        this._expanded.set(panel.dataset.key, Boolean(event.detail?.expanded));
+      });
+    });
+
     // Bind all data controls
     root
-      .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle]")
+      .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle], [data-brighten-toggle]")
       .forEach((control) => this._bindControl(control));
 
     // After prepending a new light, smooth-scroll it into view.
@@ -610,6 +808,21 @@ class DimsomePanel extends HTMLElement {
     return parts.join(" · ");
   }
 
+  _renderChips(light) {
+    return `
+      ${hasTimingOverride(light) ? `
+        <span class="status-chip status-custom-schedule">
+          <span class="chip-dot"></span>Custom schedule
+        </span>
+      ` : ""}
+      ${this._renderStatusChip(light.entity_id)}
+    `;
+  }
+
+  _expandedAttr(key, fallback = false) {
+    return (this._expanded.get(key) ?? fallback) ? "expanded" : "";
+  }
+
   _renderStatusChip(entityId) {
     const rt = this._runtime?.[entityId];
     const status = rt?.status || "tracking";
@@ -620,7 +833,7 @@ class DimsomePanel extends HTMLElement {
   }
 
   // Compute today's dim/brighten windows from global schedule + ramp duration.
-  _scheduleWindows(now) {
+  _scheduleWindows(now, light = null) {
     const lat = this._hass?.config?.latitude ?? 52.0;
     const lon = this._hass?.config?.longitude ?? 5.0;
     const start = new Date(now);
@@ -628,9 +841,10 @@ class DimsomePanel extends HTMLElement {
     const end = new Date(now);
     end.setHours(23, 59, 59, 999);
 
-    const dimSched = this._config.global.dim_schedule || {};
-    const briSched = this._config.global.brighten_schedule || {};
-    const rampMin = durationToMinutes(this._config.global.ramp_duration || "01:00:00", 60);
+    const global = this._config.global;
+    const dimSched = light?.dim_schedule || global.dim_schedule || {};
+    const briSched = light?.brighten_schedule || global.brighten_schedule || {};
+    const rampMin = durationToMinutes(light?.ramp_duration || global.ramp_duration || "01:00:00", 60);
 
     const dimStart = dimSched.type === "fixed_time"
       ? timeOfDayToday(dimSched.at, now)
@@ -725,14 +939,14 @@ class DimsomePanel extends HTMLElement {
 
         <line class="horizon" x1="${padX}" y1="${horizonY}" x2="${padX + innerW}" y2="${horizonY}"/>
         <line class="twilight" x1="${padX}" y1="${twilightY}" x2="${padX + innerW}" y2="${twilightY}"/>
-        <text class="axis-label" x="${padX + innerW - 4}" y="${twilightY - 4}" text-anchor="end">civil twilight −6°</text>
+        <text class="axis-label" x="${padX + innerW - 4}" y="${twilightY + 12}" text-anchor="end">civil twilight −6°</text>
         <text class="axis-label" x="${padX + innerW - 4}" y="${horizonY - 4}" text-anchor="end">horizon</text>
 
         <path d="${dayPath}" fill="url(#day-fill)"/>
         <path class="sun-path" d="${path}" fill="none"/>
 
-        ${eventMarker(windows.dimStart, `dim ${formatTime(windows.dimStart || now)}`, "ev-dim")}
-        ${eventMarker(windows.briStart, `bright ${formatTime(windows.briStart || now)}`, "ev-bri")}
+        ${eventMarker(windows.dimStart, `Dim ${formatTime(windows.dimStart || now)}`, "ev-dim")}
+        ${eventMarker(windows.briStart, `Brighten ${formatTime(windows.briStart || now)}`, "ev-bri")}
 
         <line class="now-line" x1="${nowX.toFixed(1)}" y1="${padTop}" x2="${nowX.toFixed(1)}" y2="${padTop + innerH}"/>
         <circle class="now-dot" cx="${nowX.toFixed(1)}" cy="${elevToY(solarElevation(lat, lon, now)).toFixed(1)}" r="5"/>
@@ -855,6 +1069,8 @@ class DimsomePanel extends HTMLElement {
       <ha-card>
         <ha-expansion-panel
           outlined
+          data-key="global"
+          ${this._expandedAttr("global")}
           header="Schedule &amp; defaults"
           secondary="Dim and brighten timing, plus fall-backs for every light"
         >
@@ -931,10 +1147,119 @@ class DimsomePanel extends HTMLElement {
     `;
   }
 
+  _pctInput(label, path, value) {
+    return this._renderField(label, `
+      <div class="number-input-wrap" data-suffix="%">
+        <input
+          class="native-number"
+          aria-label="${escapeHtml(label)}"
+          type="number"
+          min="1"
+          max="100"
+          inputmode="numeric"
+          value="${escapeHtml(value)}"
+          data-number="int"
+          data-path="${escapeHtml(path)}"
+        >
+      </div>
+    `);
+  }
+
+  _renderProfile(light, index) {
+    const now = new Date();
+    const windows = this._scheduleWindows(now, light);
+    const levels = brightnessLevels(light);
+    const samples = brightnessProfile(levels, windows, windows.start);
+    const invalid = levels.min > levels.max || levels.briMin > levels.briMax;
+    const hasColor = levels.kMin !== null;
+    const kelvinRange = (from, to) => (hasColor ? `, ${from} K → ${to} K` : "");
+    const caption = [
+      windows.briStart
+        ? `Brighten ${formatTime(windows.briStart)}: ${levels.briMin}% → ${levels.briMax}%${kelvinRange(levels.kMin, levels.kMax)}`
+        : "",
+      windows.dimStart
+        ? `Dim ${formatTime(windows.dimStart)}: ${levels.max}% → ${levels.min}%${kelvinRange(levels.kMax, levels.kMin)}`
+        : "",
+    ].filter(Boolean).join(" · ");
+    if (!samples.length) {
+      return `<div class="profile"><div class="profile-caption">No ramps scheduled today.</div></div>`;
+    }
+    const W = 1000;
+    const H = 100;
+    const pad = 6;
+    const span = 86_400_000;
+    const x = (t) => ((t - windows.start.getTime()) / span) * W;
+    const y = (v) => pad + (1 - v / 100) * (H - pad * 2);
+    const line = samples
+      .map((s, i) => `${i === 0 ? "M" : "L"}${x(s.t).toFixed(1)} ${y(s.v).toFixed(1)}`)
+      .join(" ");
+    const first = samples[0];
+    const last = samples.at(-1);
+    const area = `${line} L${x(last.t).toFixed(1)} ${H} L${x(first.t).toFixed(1)} ${H} Z`;
+    const grid = [6, 12, 18].map((h) => {
+      const gx = (h / 24) * W;
+      return `<line class="profile-grid" x1="${gx}" y1="0" x2="${gx}" y2="${H}"/>`;
+    }).join("");
+    const nowX = x(now.getTime()).toFixed(1);
+    // With color configured, tint the line by the color temperature the
+    // engine targets at each moment; one stop per change (plateaus collapse).
+    // The light's own Kelvin range is stretched over 2000-6500 K so even a
+    // narrow range (e.g. 2300-2450 K) shows a visible shift; the caption
+    // carries the true values.
+    const colored = hasColor && !invalid;
+    const gradientId = `kelvin-${index}`;
+    const lowK = Math.min(levels.kMin ?? 0, levels.kMax ?? 0);
+    const highK = Math.max(levels.kMin ?? 0, levels.kMax ?? 0);
+    const displayKelvin = (kelvin) => (
+      highK > lowK ? 2000 + ((kelvin - lowK) / (highK - lowK)) * 4500 : kelvin
+    );
+    let gradient = "";
+    if (colored) {
+      const stops = [];
+      let previous = null;
+      samples.forEach((sample, i) => {
+        const kelvin = Math.round(sample.k);
+        const next = samples[i + 1];
+        const changesNext = next && Math.round(next.k) !== kelvin;
+        if (kelvin !== previous || changesNext || i === samples.length - 1) {
+          stops.push(`<stop offset="${(x(sample.t) / W).toFixed(4)}" stop-color="${kelvinToRgb(displayKelvin(kelvin))}"/>`);
+        }
+        previous = kelvin;
+      });
+      gradient = `
+        <defs>
+          <linearGradient id="${gradientId}" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${W}" y2="0">
+            ${stops.join("")}
+          </linearGradient>
+        </defs>
+      `;
+    }
+    const paint = (property) => (colored ? ` style="${property}: url(#${gradientId})"` : "");
+    return `
+      <div class="profile${invalid ? " profile-invalid" : ""}${colored ? " profile-kelvin" : ""}">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
+          aria-label="Brightness over today: ${escapeHtml(caption)}">
+          ${gradient}
+          ${grid}
+          <path class="profile-area" d="${area}"${paint("fill")}/>
+          ${colored ? `<path class="profile-line-casing" d="${line}"/>` : ""}
+          <path class="profile-line" d="${line}"${paint("stroke")}/>
+          <line class="profile-now" x1="${nowX}" y1="0" x2="${nowX}" y2="${H}"/>
+        </svg>
+        <div class="profile-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+        <div class="profile-caption">${invalid
+          ? "Minimum is above maximum, so this won't save."
+          : escapeHtml(caption)}</div>
+      </div>
+    `;
+  }
+
   _renderLight(light, index) {
     const state = this._lightStates[light.entity_id] || {};
     const hasColor = Boolean(light.min_color && light.max_color);
     const hasOverrides = hasTimingOverride(light);
+    const separateDawn = hasBrightenLevels(light);
+    const key = light.entity_id || `new-${index}`;
     const overrideDetails = hasOverrides ? [
       `dim ${formatScheduleSummary(light.dim_schedule || this._config.global.dim_schedule)}`,
       `brighten ${formatScheduleSummary(light.brighten_schedule || this._config.global.brighten_schedule)}`,
@@ -942,7 +1267,7 @@ class DimsomePanel extends HTMLElement {
     ].join(" · ") : "Using global timing";
     const entityName = formatEntityName(state, light.entity_id);
     return `
-      <ha-card class="light-card" data-entity-id="${escapeHtml(light.entity_id)}">
+      <ha-card class="light-card" data-entity-id="${escapeHtml(light.entity_id)}" data-index="${index}">
         <div class="card-content">
           <div class="light-header-row">
             <div class="entity-title">
@@ -957,12 +1282,7 @@ class DimsomePanel extends HTMLElement {
               </div>
             </div>
             <div class="light-actions">
-              ${hasOverrides ? `
-                <span class="status-chip status-custom-schedule">
-                  <span class="chip-dot"></span>Custom schedule
-                </span>
-              ` : ""}
-              ${this._renderStatusChip(light.entity_id)}
+              <span class="light-chips">${this._renderChips(light)}</span>
               <ha-icon-button
                 label="Resume this light"
                 title="Resume"
@@ -971,198 +1291,220 @@ class DimsomePanel extends HTMLElement {
               ></ha-icon-button>
               <ha-icon-button
                 label="Remove light"
+                title="Remove"
                 class="remove-btn"
                 data-action="remove-light"
                 data-index="${index}"
               ></ha-icon-button>
             </div>
           </div>
-          <div class="field-grid top-gap">
-            ${this._renderField("Light Entity", `
+
+          <div class="levels">
+            <div class="levels-fields">
+              <div class="field-grid pair">
+                ${this._pctInput("Minimum brightness", `lights.${index}.min_brightness_pct`, light.min_brightness_pct ?? 10)}
+                ${this._pctInput("Maximum brightness", `lights.${index}.max_brightness_pct`, light.max_brightness_pct ?? 80)}
+              </div>
+              <div class="setting-row compact-row">
+                <div class="setting-copy">
+                  <span class="setting-heading">Separate dawn levels</span>
+                  <span class="setting-description">Brighten over a different range, e.g. start the morning brighter.</span>
+                </div>
+                <div class="setting-control">
+                  <ha-switch
+                    aria-label="Separate dawn levels"
+                    ${separateDawn ? "checked" : ""}
+                    data-brighten-toggle="${index}"
+                  ></ha-switch>
+                </div>
+              </div>
+              ${separateDawn ? `
+                <div class="field-grid pair">
+                  ${this._pctInput("Dawn minimum", `lights.${index}.brighten_min_brightness_pct`, light.brighten_min_brightness_pct ?? light.min_brightness_pct ?? 10)}
+                  ${this._pctInput("Dawn maximum", `lights.${index}.brighten_max_brightness_pct`, light.brighten_max_brightness_pct ?? light.max_brightness_pct ?? 80)}
+                </div>
+                <p class="levels-note">The dawn maximum also holds through the day. Dusk still dims from maximum to minimum.</p>
+              ` : ""}
+            </div>
+            ${this._renderProfile(light, index)}
+          </div>
+
+          <ha-expansion-panel
+            outlined
+            class="light-advanced"
+            data-key="adv-${escapeHtml(key)}"
+            ${this._expandedAttr(`adv-${key}`)}
+            header="Color &amp; advanced"
+            secondary="${escapeHtml(this._advancedSummary(light))}"
+          >
+          <div class="panel-body">
+            ${this._renderField("Light entity", `
               <ha-entity-picker
                 allow-custom-entity
                 data-value="${escapeHtml(light.entity_id || "")}"
                 data-path="lights.${index}.entity_id"
               ></ha-entity-picker>
             `)}
-            ${this._renderField("Minimum Brightness", `
-              <div class="number-input-wrap" data-suffix="%">
-                <input
-                  class="native-number"
-                  aria-label="Minimum Brightness"
-                  type="number"
-                  min="1"
-                  max="100"
-                  inputmode="numeric"
-                  value="${light.min_brightness_pct ?? 10}"
-                  data-number="int"
-                  data-path="lights.${index}.min_brightness_pct"
-                >
-              </div>
-            `)}
-            ${this._renderField("Maximum Brightness", `
-              <div class="number-input-wrap" data-suffix="%">
-                <input
-                  class="native-number"
-                  aria-label="Maximum Brightness"
-                  type="number"
-                  min="1"
-                  max="100"
-                  inputmode="numeric"
-                  value="${light.max_brightness_pct ?? 80}"
-                  data-number="int"
-                  data-path="lights.${index}.max_brightness_pct"
-                >
-              </div>
-            `)}
-          </div>
-          <ha-expansion-panel
-            outlined
-            class="light-advanced"
-            header="Color &amp; advanced"
-            secondary="Color temperature, settle delay, recovery, split calls"
-          >
-          <div class="settings-list">
-            ${this._renderSetting("Adjust Color Temperature", "Set a Kelvin range during the ramp.", `
-              <ha-switch
-                aria-label="Adjust Color Temperature"
-                ${hasColor ? "checked" : ""}
-                data-color-toggle="${index}"
-              ></ha-switch>
-            `)}
-            ${this._renderSetting("Split Brightness & Color Calls", "Use separate service calls for this light.", `
-              <ha-switch
-                aria-label="Split Brightness &amp; Color Calls"
-                ${light.split_turn_on_calls ? "checked" : ""}
-                data-path="lights.${index}.split_turn_on_calls"
-              ></ha-switch>
-            `)}
-            ${this._renderSetting("Apply On Recovery", "Apply the current day, night, or ramp target when this light recovers online while on.", `
-              <ha-switch
-                aria-label="Apply On Recovery"
-                ${(light.apply_on_recovered_on ?? true) ? "checked" : ""}
-                data-path="lights.${index}.apply_on_recovered_on"
-              ></ha-switch>
-            `)}
-            ${this._renderSetting("Settle Delay", "Wait after this light turns on before applying the current target.", `
-              <div class="number-input-wrap" data-suffix="s">
-                <input
-                  class="native-number"
-                  aria-label="Settle Delay Seconds"
-                  type="number"
-                  min="0"
-                  max="30"
-                  step="0.1"
-                  inputmode="decimal"
-                  value="${durationToSeconds(light.settle_delay)}"
-                  data-path="lights.${index}.settle_delay"
-                  data-number="float"
-                >
-              </div>
-            `)}
-          </div>
-          ${hasColor ? `
-            <div class="field-grid top-gap">
-              ${this._renderField("Minimum Brightness Color Temperature", `
-                <div class="number-input-wrap" data-suffix="K">
-                  <input
-                    class="native-number"
-                    aria-label="Minimum Brightness Color Temperature"
-                    type="number"
-                    min="1000"
-                    max="12000"
-                    step="50"
-                    inputmode="numeric"
-                    value="${light.min_color?.value ?? 2200}"
-                    data-number="int"
-                    data-path="lights.${index}.min_color.value"
-                  >
-                </div>
+            <div class="settings-list">
+              ${this._renderSetting("Adjust color temperature", "Set a Kelvin range during the ramp.", `
+                <ha-switch
+                  aria-label="Adjust color temperature"
+                  ${hasColor ? "checked" : ""}
+                  data-color-toggle="${index}"
+                ></ha-switch>
               `)}
-              ${this._renderField("Maximum Brightness Color Temperature", `
-                <div class="number-input-wrap" data-suffix="K">
+              ${hasColor ? `
+                <div class="field-grid pair nested">
+                  ${this._renderField("At minimum brightness", `
+                    <div class="number-input-wrap" data-suffix="K">
+                      <input
+                        class="native-number"
+                        aria-label="Color temperature at minimum brightness"
+                        type="number"
+                        min="1000"
+                        max="12000"
+                        step="50"
+                        inputmode="numeric"
+                        value="${light.min_color?.value ?? 2200}"
+                        data-number="int"
+                        data-path="lights.${index}.min_color.value"
+                      >
+                    </div>
+                  `)}
+                  ${this._renderField("At maximum brightness", `
+                    <div class="number-input-wrap" data-suffix="K">
+                      <input
+                        class="native-number"
+                        aria-label="Color temperature at maximum brightness"
+                        type="number"
+                        min="1000"
+                        max="12000"
+                        step="50"
+                        inputmode="numeric"
+                        value="${light.max_color?.value ?? 4000}"
+                        data-number="int"
+                        data-path="lights.${index}.max_color.value"
+                      >
+                    </div>
+                  `)}
+                </div>
+              ` : ""}
+              ${this._renderSetting("Split brightness & color calls", "Use separate service calls for this light.", `
+                <ha-switch
+                  aria-label="Split brightness &amp; color calls"
+                  ${light.split_turn_on_calls ? "checked" : ""}
+                  data-path="lights.${index}.split_turn_on_calls"
+                ></ha-switch>
+              `)}
+              ${this._renderSetting("Apply on recovery", "Apply the current day, night, or ramp target when this light comes back online while on.", `
+                <ha-switch
+                  aria-label="Apply on recovery"
+                  ${(light.apply_on_recovered_on ?? true) ? "checked" : ""}
+                  data-path="lights.${index}.apply_on_recovered_on"
+                ></ha-switch>
+              `)}
+              ${this._renderSetting("Settle delay", "Wait after this light turns on before applying the current target.", `
+                <div class="number-input-wrap" data-suffix="s">
                   <input
                     class="native-number"
-                    aria-label="Maximum Brightness Color Temperature"
+                    aria-label="Settle delay seconds"
                     type="number"
-                    min="1000"
-                    max="12000"
-                    step="50"
-                    inputmode="numeric"
-                    value="${light.max_color?.value ?? 4000}"
-                    data-number="int"
-                    data-path="lights.${index}.max_color.value"
+                    min="0"
+                    max="30"
+                    step="0.1"
+                    inputmode="decimal"
+                    value="${durationToSeconds(light.settle_delay)}"
+                    data-path="lights.${index}.settle_delay"
+                    data-number="float"
                   >
                 </div>
               `)}
             </div>
-          ` : ""}
+          </div>
           </ha-expansion-panel>
 
           <ha-expansion-panel
             outlined
             class="light-override"
+            data-key="ovr-${escapeHtml(key)}"
+            ${this._expandedAttr(`ovr-${key}`, hasOverrides)}
             header="Custom schedule"
             secondary="${escapeHtml(overrideDetails)}"
-            ${hasOverrides ? "expanded" : ""}
           >
-          <div class="settings-list">
-            ${this._renderSetting("Override Global Timing", "Use a separate schedule and resume behavior for this light.", `
-              <ha-switch
-                aria-label="Override Global Timing"
-                ${hasOverrides ? "checked" : ""}
-                data-override-toggle="${index}"
-              ></ha-switch>
-            `)}
-          </div>
-          ${hasOverrides ? `
-            <div class="override-box">
-              <div class="two-col">
-                ${this._renderSchedule("Dimming Override", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
-                ${this._renderSchedule("Brightening Override", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
-              </div>
-              <div class="field-grid top-gap">
-                ${this._renderField("Ramp Duration", `
-                  <div class="number-input-wrap" data-suffix="min">
-                    <input
-                      class="native-number"
-                      aria-label="Ramp Duration Minutes"
-                      type="number"
-                      min="1"
-                      max="720"
-                      inputmode="numeric"
-                      value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
-                      data-path="lights.${index}.ramp_duration"
-                      data-duration="minutes"
-                    >
-                  </div>
-                `)}
-                ${this._renderField("Override Resume", selectHtml({
-                  path: `lights.${index}.override_resume_mode`,
-                  value: light.override_resume_mode || this._config.global.override_resume_mode || "manual_only",
-                  options: RESUME_MODES,
-                }))}
-                ${this._renderField("Grace Period", `
-                  <div class="number-input-wrap" data-suffix="min">
-                    <input
-                      class="native-number"
-                      aria-label="Grace Period Minutes"
-                      type="number"
-                      min="1"
-                      max="720"
-                      inputmode="numeric"
-                      value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
-                      data-path="lights.${index}.override_grace_period"
-                      data-duration="minutes"
-                    >
-                  </div>
-                `)}
-              </div>
+          <div class="panel-body">
+            <div class="settings-list">
+              ${this._renderSetting("Override global timing", "Use a separate schedule and resume behavior for this light.", `
+                <ha-switch
+                  aria-label="Override global timing"
+                  ${hasOverrides ? "checked" : ""}
+                  data-override-toggle="${index}"
+                ></ha-switch>
+              `)}
             </div>
-          ` : ""}
+            ${hasOverrides ? `
+              <div class="override-box">
+                <div class="two-col">
+                  ${this._renderSchedule("Dimming", `lights.${index}.dim_schedule`, this._config.global.dim_schedule)}
+                  ${this._renderSchedule("Brightening", `lights.${index}.brighten_schedule`, this._config.global.brighten_schedule)}
+                </div>
+                <div class="field-grid top-gap">
+                  ${this._renderField("Ramp duration", `
+                    <div class="number-input-wrap" data-suffix="min">
+                      <input
+                        class="native-number"
+                        aria-label="Ramp duration minutes"
+                        type="number"
+                        min="1"
+                        max="720"
+                        inputmode="numeric"
+                        value="${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))}"
+                        data-path="lights.${index}.ramp_duration"
+                        data-duration="minutes"
+                      >
+                    </div>
+                  `)}
+                  ${this._renderField("Override resume", selectHtml({
+                    path: `lights.${index}.override_resume_mode`,
+                    value: light.override_resume_mode || this._config.global.override_resume_mode || "manual_only",
+                    options: RESUME_MODES,
+                  }))}
+                  ${this._renderField("Grace period", `
+                    <div class="number-input-wrap" data-suffix="min">
+                      <input
+                        class="native-number"
+                        aria-label="Grace period minutes"
+                        type="number"
+                        min="1"
+                        max="720"
+                        inputmode="numeric"
+                        value="${durationToMinutes(light.override_grace_period, durationToMinutes(this._config.global.override_grace_period, 15))}"
+                        data-path="lights.${index}.override_grace_period"
+                        data-duration="minutes"
+                      >
+                    </div>
+                  `)}
+                </div>
+              </div>
+            ` : ""}
+          </div>
           </ha-expansion-panel>
         </div>
       </ha-card>
+    `;
+  }
+
+  _renderSaveBar() {
+    return `
+      <div class="save-bar${this._saveError ? " save-bar-error" : ""}" role="region" aria-label="Unsaved changes" ${this._isDirty() ? "" : "hidden"}>
+        <span class="save-bar-text" role="${this._saveError ? "alert" : "status"}">${escapeHtml(
+          this._saveError
+          || (this._canSave() ? "You have unsaved changes" : "Only administrators can save changes")
+        )}</span>
+        <div class="save-bar-actions">
+          <ha-button data-action="discard" ${this._saving ? "disabled" : ""}>Discard</ha-button>
+          <ha-button raised data-action="save" ${this._saving || !this._canSave() ? "disabled" : ""}>${this._saving ? "Saving…" : "Save"}</ha-button>
+        </div>
+      </div>
     `;
   }
 
@@ -1252,6 +1594,9 @@ class DimsomePanel extends HTMLElement {
 
   _render() {
     if (!this.shadowRoot) return;
+    this.shadowRoot.querySelectorAll("ha-expansion-panel[data-key]").forEach((panel) => {
+      this._expanded.set(panel.dataset.key, Boolean(panel.expanded));
+    });
 
     if (!this._loaded) {
       this.shadowRoot.innerHTML = `
@@ -1329,6 +1674,7 @@ class DimsomePanel extends HTMLElement {
         </section>
       </main>
 
+      ${this._renderSaveBar()}
       ${this._renderAddDialog()}
     `;
     this._hydrateNativeComponents();
@@ -1383,7 +1729,7 @@ class DimsomePanel extends HTMLElement {
           box-sizing: border-box;
           max-width: 1120px;
           margin: 0 auto;
-          padding: 16px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left));
+          padding: 16px max(16px, env(safe-area-inset-right)) 24px max(16px, env(safe-area-inset-left));
         }
 
         /* Reset bare elements — shadow DOM doesn't inherit HA globals */
@@ -1937,6 +2283,173 @@ class DimsomePanel extends HTMLElement {
           display: block;
         }
 
+        /* ── Brightness levels + daily profile ───────────────────────── */
+        .levels {
+          align-items: start;
+          display: grid;
+          gap: 16px 24px;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          margin-top: 16px;
+        }
+
+        .levels-fields {
+          display: grid;
+          gap: 12px;
+        }
+
+        .field-grid.pair {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .field-grid.nested {
+          padding: 4px 0 12px;
+        }
+
+        .setting-row.compact-row {
+          border-top: none;
+          padding: 0;
+        }
+
+        .levels-note {
+          color: var(--secondary-text-color);
+          font-size: 0.8125rem;
+          line-height: 1.4;
+        }
+
+        .profile {
+          background: var(--secondary-background-color);
+          border-radius: 10px;
+          display: grid;
+          gap: 4px;
+          padding: 12px 12px 10px;
+        }
+
+        .profile svg {
+          display: block;
+          height: 88px;
+          overflow: visible;
+          width: 100%;
+        }
+
+        .profile-grid {
+          stroke: var(--divider-color);
+          stroke-width: 1;
+          vector-effect: non-scaling-stroke;
+        }
+
+        .profile-area {
+          fill: color-mix(in srgb, var(--primary-color) 16%, transparent);
+        }
+
+        .profile-line {
+          fill: none;
+          stroke: var(--primary-color);
+          stroke-linejoin: round;
+          stroke-width: 2;
+          vector-effect: non-scaling-stroke;
+        }
+
+        .profile-now {
+          stroke: var(--primary-text-color);
+          stroke-dasharray: 3 3;
+          stroke-width: 1;
+          opacity: 0.6;
+          vector-effect: non-scaling-stroke;
+        }
+
+        /* Kelvin-tinted line: a thin dark casing keeps near-white daytime
+           colors readable on light themes. */
+        .profile-kelvin .profile-line {
+          stroke-width: 2.5;
+        }
+
+        .profile-kelvin .profile-area {
+          fill-opacity: 0.16;
+        }
+
+        .profile-line-casing {
+          fill: none;
+          stroke: rgba(0, 0, 0, 0.45);
+          stroke-linejoin: round;
+          stroke-width: 4.5;
+          vector-effect: non-scaling-stroke;
+        }
+
+        .profile-invalid .profile-line { stroke: var(--error-color, #d32f2f); }
+        .profile-invalid .profile-area { fill: color-mix(in srgb, var(--error-color, #d32f2f) 12%, transparent); }
+        .profile-invalid .profile-caption { color: var(--error-color, #d32f2f); }
+
+        .profile-axis {
+          color: var(--secondary-text-color);
+          display: flex;
+          font-size: 0.6875rem;
+          font-variant-numeric: tabular-nums;
+          justify-content: space-between;
+        }
+
+        .profile-caption {
+          color: var(--secondary-text-color);
+          font-size: 0.8125rem;
+          font-variant-numeric: tabular-nums;
+          line-height: 1.4;
+          margin-top: 2px;
+        }
+
+        .panel-body {
+          display: grid;
+          gap: 8px;
+          padding: 4px 0 8px;
+        }
+
+        .light-chips {
+          align-items: center;
+          display: inline-flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-inline-end: 4px;
+        }
+
+        /* ── Unsaved changes bar ─────────────────────────────────────── */
+        .save-bar {
+          align-items: center;
+          background: var(--card-background-color, var(--primary-background-color));
+          border: 1px solid var(--divider-color);
+          border-radius: 12px;
+          bottom: max(16px, env(safe-area-inset-bottom));
+          box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+          box-sizing: border-box;
+          display: flex;
+          gap: 16px;
+          justify-content: space-between;
+          margin: 0 auto;
+          max-width: min(640px, calc(100% - 32px));
+          padding: 8px 8px 8px 20px;
+          position: sticky;
+          z-index: 5;
+        }
+
+        .save-bar[hidden] {
+          display: none;
+        }
+
+        .save-bar-text {
+          font-weight: 500;
+          line-height: 1.35;
+        }
+
+        .save-bar-error {
+          border-color: var(--error-color, #d32f2f);
+        }
+
+        .save-bar-error .save-bar-text {
+          color: var(--error-color, #d32f2f);
+        }
+
+        .save-bar-actions {
+          display: flex;
+          gap: 8px;
+        }
+
         /* ── Mobile ──────────────────────────────────────────────────── */
         @media (max-width: 720px) {
           .hero-content { padding: 16px; }
@@ -1971,6 +2484,18 @@ class DimsomePanel extends HTMLElement {
 
           .dialog-row {
             grid-template-columns: 1fr;
+          }
+
+          .levels {
+            grid-template-columns: 1fr;
+          }
+
+          .field-grid.pair {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .save-bar-text {
+            font-size: 0.875rem;
           }
         }
       </style>

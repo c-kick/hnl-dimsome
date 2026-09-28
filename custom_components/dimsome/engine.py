@@ -217,7 +217,7 @@ def target_for_window(config: ResolvedLightConfig, window: RampWindow, now: date
         color = interpolate_color(config.max_color, config.min_color, progress)
     else:
         brightness = interpolate(
-            config.min_brightness_pct, config.max_brightness_pct, progress
+            config.brighten_min_pct, config.brighten_max_pct, progress
         )
         color = interpolate_color(config.min_color, config.max_color, progress)
     return LightTarget(brightness_pct=brightness, color=color)
@@ -230,7 +230,7 @@ def low_plateau_target(config: ResolvedLightConfig) -> LightTarget:
 
 def high_plateau_target(config: ResolvedLightConfig) -> LightTarget:
     """Return the target for the high plateau."""
-    return LightTarget(config.max_brightness_pct, config.max_color)
+    return LightTarget(config.brighten_max_pct, config.max_color)
 
 
 def target_for_now(
