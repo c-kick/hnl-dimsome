@@ -136,9 +136,7 @@ class DimsomeController:
             self._refresh_unsub = None
         for runtime in self.lights.values():
             runtime.pending_target = None
-            if runtime.grace_unsub is not None:
-                runtime.grace_unsub()
-                runtime.grace_unsub = None
+            _cancel_grace_resume(runtime)
         tasks = list(self._turn_on_tasks)
         for task in tasks:
             task.cancel()
@@ -156,14 +154,11 @@ class DimsomeController:
         for entity_id, runtime in self.lights.items():
             if entity_id not in selected:
                 continue
-            runtime.stood_down = False
-            runtime.stood_down_window = None
+            _clear_override(runtime)
             runtime.last_target = None
             runtime.pending_target = None
             runtime.expected_target = None
-            if runtime.grace_unsub is not None:
-                runtime.grace_unsub()
-                runtime.grace_unsub = None
+            _cancel_grace_resume(runtime)
         await self.async_tick()
 
     async def async_set_enabled(self, entity_id: str, enabled: bool) -> None:
@@ -172,15 +167,10 @@ class DimsomeController:
         runtime.config = replace(runtime.config, enabled=enabled)
         runtime.last_target = None
         runtime.pending_target = None
+        runtime.stood_down = not enabled
+        runtime.stood_down_window = None
         if not enabled:
-            runtime.stood_down = True
-            runtime.stood_down_window = None
-            if runtime.grace_unsub is not None:
-                runtime.grace_unsub()
-                runtime.grace_unsub = None
-        else:
-            runtime.stood_down = False
-            runtime.stood_down_window = None
+            _cancel_grace_resume(runtime)
         await self.async_tick()
 
     def manual_overrides(self) -> dict[str, RampWindow]:
@@ -278,8 +268,7 @@ class DimsomeController:
                 stood_down_window=runtime.stood_down_window,
                 window=window,
             ):
-                runtime.stood_down = False
-                runtime.stood_down_window = None
+                _clear_override(runtime)
                 _LOGGER.debug(
                     "Resuming %s for new ramp window", runtime.config.entity_id
                 )
@@ -380,8 +369,7 @@ class DimsomeController:
         ):
             if not self._can_apply_target(runtime):
                 return
-            runtime.stood_down = False
-            runtime.stood_down_window = None
+            _clear_override(runtime)
             runtime.last_target = None
             self._create_turn_on_task(runtime)
             return
@@ -399,9 +387,7 @@ class DimsomeController:
                     self._native_user_ids,
                 )
             ):
-                runtime.stood_down = True
-                runtime.stood_down_window = window
-                self._schedule_grace_resume(runtime)
+                self._stand_down(runtime, window)
             return
         if getattr(new_state.context, "id", None) == runtime.last_apply_context_id:
             return
@@ -414,14 +400,11 @@ class DimsomeController:
         if old_state is not None and old_state.state == STATE_OFF:
             runtime.last_target = None
             if window is not None and manual_context:
-                runtime.stood_down = True
-                runtime.stood_down_window = window
-                self._schedule_grace_resume(runtime)
+                self._stand_down(runtime, window)
                 return
             if not self._can_apply_target(runtime):
                 return
-            runtime.stood_down = False
-            runtime.stood_down_window = None
+            _clear_override(runtime)
             self._create_turn_on_task(runtime)
             return
 
@@ -439,10 +422,8 @@ class DimsomeController:
         if not manual_context:
             _LOGGER.debug("Ignoring automation-originated change for %s", entity_id)
             return
-        runtime.stood_down = True
-        runtime.stood_down_window = window
         _LOGGER.debug("Standing down %s after external light change", entity_id)
-        self._schedule_grace_resume(runtime)
+        self._stand_down(runtime, window)
 
     @callback
     def _async_automation_or_script_started(self, event: Event) -> None:
@@ -593,11 +574,15 @@ class DimsomeController:
             )
         return True
 
+    def _stand_down(self, runtime: LightRuntime, window: RampWindow) -> None:
+        """Leave the light alone for the rest of window after a manual change."""
+        runtime.stood_down = True
+        runtime.stood_down_window = window
+        self._schedule_grace_resume(runtime)
+
     def _schedule_grace_resume(self, runtime: LightRuntime) -> None:
         """Schedule optional automatic resume after a manual override."""
-        if runtime.grace_unsub is not None:
-            runtime.grace_unsub()
-            runtime.grace_unsub = None
+        _cancel_grace_resume(runtime)
         if (
             runtime.config.override_resume_mode is not OverrideResumeMode.AFTER_GRACE_PERIOD
             or runtime.config.override_grace_period is None
@@ -609,8 +594,7 @@ class DimsomeController:
             runtime.grace_unsub = None
             if current_window == runtime.stood_down_window:
                 return
-            runtime.stood_down = False
-            runtime.stood_down_window = None
+            _clear_override(runtime)
             await self.async_tick()
 
         runtime.grace_unsub = async_call_later(
@@ -623,6 +607,17 @@ class DimsomeController:
         """Remember the most recent tick decision for diagnostics."""
         runtime.last_decision = decision
         runtime.last_decision_at = at
+
+
+def _clear_override(runtime: LightRuntime) -> None:
+    runtime.stood_down = False
+    runtime.stood_down_window = None
+
+
+def _cancel_grace_resume(runtime: LightRuntime) -> None:
+    if runtime.grace_unsub is not None:
+        runtime.grace_unsub()
+        runtime.grace_unsub = None
 
 
 def color_service_data(target: LightTarget) -> dict[str, Any]:
