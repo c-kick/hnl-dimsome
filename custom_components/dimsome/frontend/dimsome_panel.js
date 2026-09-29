@@ -516,7 +516,18 @@ class DimsomePanel extends HTMLElement {
       profile.replaceWith(wrapper.firstElementChild);
       const advanced = card.querySelector("ha-expansion-panel.light-advanced");
       if (advanced) advanced.secondary = this._advancedSummary(light);
+      const override = card.querySelector("ha-expansion-panel.light-override");
+      if (override) override.secondary = this._overrideSummary(light);
     });
+  }
+
+  _overrideSummary(light) {
+    if (!hasTimingOverride(light)) return "Using global timing";
+    return [
+      `dim ${formatScheduleSummary(light.dim_schedule || this._config.global.dim_schedule)}`,
+      `brighten ${formatScheduleSummary(light.brighten_schedule || this._config.global.brighten_schedule)}`,
+      `ramp ${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))} min`,
+    ].join(" · ");
   }
 
   _advancedSummary(light) {
@@ -960,7 +971,7 @@ class DimsomePanel extends HTMLElement {
 
         <line class="horizon" x1="${padX}" y1="${horizonY}" x2="${padX + innerW}" y2="${horizonY}"/>
         <line class="twilight" x1="${padX}" y1="${twilightY}" x2="${padX + innerW}" y2="${twilightY}"/>
-        <text class="axis-label" x="${padX + 4}" y="${twilightY - 4}" text-anchor="start">civil twilight −6°</text>
+        <text class="axis-label" x="${padX + 4}" y="${twilightY + 12}" text-anchor="start">civil twilight −6°</text>
         <text class="axis-label" x="${padX + innerW - 4}" y="${horizonY - 4}" text-anchor="end">horizon</text>
 
         <path d="${dayPath}" fill="url(#day-fill)"/>
@@ -1309,11 +1320,6 @@ class DimsomePanel extends HTMLElement {
     const hasColor = Boolean(light.min_color && light.max_color);
     const hasOverrides = hasTimingOverride(light);
     const key = light.entity_id || `new-${index}`;
-    const overrideDetails = hasOverrides ? [
-      `dim ${formatScheduleSummary(light.dim_schedule || this._config.global.dim_schedule)}`,
-      `brighten ${formatScheduleSummary(light.brighten_schedule || this._config.global.brighten_schedule)}`,
-      `ramp ${durationToMinutes(light.ramp_duration, durationToMinutes(this._config.global.ramp_duration))} min`,
-    ].join(" · ") : "Using global timing";
     const entityName = formatEntityName(state, light.entity_id);
     return `
       <ha-card class="light-card" data-entity-id="${escapeHtml(light.entity_id)}" data-index="${index}">
@@ -1458,7 +1464,7 @@ class DimsomePanel extends HTMLElement {
             data-key="ovr-${escapeHtml(key)}"
             ${this._expandedAttr(`ovr-${key}`, hasOverrides)}
             header="Custom schedule"
-            secondary="${escapeHtml(overrideDetails)}"
+            secondary="${escapeHtml(this._overrideSummary(light))}"
           >
           <div class="panel-body">
             <div class="settings-list">
