@@ -15,7 +15,7 @@ By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn
 
 Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`).
 
-<img width="800" src="https://github.com/user-attachments/assets/5fc1411b-bc52-4d1e-91ed-ac83bacab8e2" alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 06:40, ahead of civil dawn at 07:08, and the dim ramp at 21:00, after civil dusk at 19:51"/>
+<img width="1101" height="392" alt="image" src="https://github.com/user-attachments/assets/818263b9-fc44-4ae6-b4c0-66ffc9bf7025" alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 07:08 at civil dawn, and the dim ramp at 19:51, at civil dusk - the blue line is the 'now' line (at ~15:13)"/>
 
 The panel overview plots today's sun elevation with both ramps. Open dots mark civil dawn and dusk, so you can see when a start bound moves a ramp away from the sun event.
 
