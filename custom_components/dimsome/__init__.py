@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from .const import DOMAIN, PLATFORMS
+from .entity import enabled_switch_unique_id, light_unique_id
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -130,29 +131,24 @@ def _migrate_per_light_entities(
             name=entity_id,
             via_device=(DOMAIN, entry_id),
         )
-        slug = entity_id.replace(".", "_")
-        legacy_switch_unique_id = f"{entry_id}_{slug}_dimsum_enabled"
-        current_switch_unique_id = f"{entry_id}_{slug}_enabled"
         _move_entity_to_device(
-            entity_registry, "button", f"{entry_id}_{slug}_resume", light_device.id
+            entity_registry,
+            "button",
+            light_unique_id(entry_id, entity_id, "resume"),
+            light_device.id,
         )
         _move_entity_to_device(
-            entity_registry, "sensor", f"{entry_id}_{slug}_status", light_device.id
+            entity_registry,
+            "sensor",
+            light_unique_id(entry_id, entity_id, "status"),
+            light_device.id,
         )
-        if entity_registry.async_get_entity_id(
-            "switch", DOMAIN, legacy_switch_unique_id
-        ):
-            if current_entity_id := entity_registry.async_get_entity_id(
-                "switch", DOMAIN, current_switch_unique_id
-            ):
-                entity_registry.async_remove(current_entity_id)
-            _move_entity_to_device(
-                entity_registry, "switch", legacy_switch_unique_id, light_device.id
-            )
-        else:
-            _move_entity_to_device(
-                entity_registry, "switch", current_switch_unique_id, light_device.id
-            )
+        _move_entity_to_device(
+            entity_registry,
+            "switch",
+            enabled_switch_unique_id(entity_registry, entry_id, entity_id),
+            light_device.id,
+        )
 
 
 def _move_entity_to_device(

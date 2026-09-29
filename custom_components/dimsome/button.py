@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -11,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import DimsomeController
+from .entity import light_device_info, light_unique_id
 
 type DimsomeConfigEntry = ConfigEntry[DimsomeController]
 
@@ -63,23 +62,9 @@ class DimsomeLightResumeButton(ButtonEntity):
         self._controller = controller
         self._entity_id = entity_id
         self._attr_name = f"{entity_id} Resume"
-        self._attr_unique_id = f"{entry_id}_{_entity_slug(entity_id)}_resume"
-        self._attr_device_info = _light_device_info(entry_id, entity_id)
+        self._attr_unique_id = light_unique_id(entry_id, entity_id, "resume")
+        self._attr_device_info = light_device_info(entry_id, entity_id)
 
     async def async_press(self) -> None:
         """Resume Dimsome control for this light."""
         await self._controller.async_resume({self._entity_id})
-
-
-def _entity_slug(entity_id: str) -> str:
-    """Return a stable unique-id fragment for an entity id."""
-    return entity_id.replace(".", "_")
-
-
-def _light_device_info(entry_id: str, entity_id: str) -> dict[str, Any]:
-    """Return device metadata for one Dimsome-controlled light."""
-    return {
-        "identifiers": {(DOMAIN, entry_id, entity_id)},
-        "name": entity_id,
-        "via_device": (DOMAIN, entry_id),
-    }

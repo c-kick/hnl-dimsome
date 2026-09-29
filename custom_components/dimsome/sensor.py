@@ -10,8 +10,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
 from .coordinator import DimsomeController
+from .entity import light_device_info, light_unique_id
 
 type DimsomeConfigEntry = ConfigEntry[DimsomeController]
 
@@ -42,12 +42,8 @@ class DimsomeLightStatusSensor(SensorEntity):
         self._controller = controller
         self._entity_id = entity_id
         self._attr_name = f"{entity_id} Dimsome status"
-        self._attr_unique_id = f"{entry_id}_{_entity_slug(entity_id)}_status"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry_id, entity_id)},
-            "name": entity_id,
-            "via_device": (DOMAIN, entry_id),
-        }
+        self._attr_unique_id = light_unique_id(entry_id, entity_id, "status")
+        self._attr_device_info = light_device_info(entry_id, entity_id)
 
     @property
     def native_value(self) -> str:
@@ -62,8 +58,3 @@ class DimsomeLightStatusSensor(SensorEntity):
     def _runtime_status(self) -> dict[str, Any]:
         """Return current runtime diagnostics for this light."""
         return self._controller.runtime_status(self._entity_id)[self._entity_id]
-
-
-def _entity_slug(entity_id: str) -> str:
-    """Return a stable unique-id fragment for an entity id."""
-    return entity_id.replace(".", "_")
