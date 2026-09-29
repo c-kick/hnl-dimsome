@@ -1,9 +1,7 @@
-"""Home Assistant runtime controller for Dimsome.
+"""Home Assistant runtime controller for Dimsome, and the dimsome.resume service.
 
-Civil dawn and dusk come straight from Home Assistant's astral helpers, which
-are deterministic for any calendar date.  There is no sun-elevation sampling,
-no crossing reconstruction, and no anchor cache: the controller just asks
-``get_astral_event_date`` when it needs a ramp start time.
+Ramp start times come from ``get_astral_event_date``, which gives civil dawn
+and dusk for any date, so no sun-elevation events need to be caught.
 """
 
 from __future__ import annotations

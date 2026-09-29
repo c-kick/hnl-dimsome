@@ -44,7 +44,7 @@ class ScheduleType(StrEnum):
 
 
 class SunEvent(StrEnum):
-    """Civil sun events derived from sun.sun elevation."""
+    """Civil sun events a schedule can start at."""
 
     CIVIL_DAWN = "civil_dawn"
     CIVIL_DUSK = "civil_dusk"

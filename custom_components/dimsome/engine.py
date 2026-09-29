@@ -1,10 +1,8 @@
 """Pure scheduling and ramp logic for Dimsome.
 
-Civil dawn and dusk are deterministic for any date, so the engine never
-samples sun elevation or reconstructs threshold crossings.  Callers supply a
-``civil_lookup`` that resolves a :class:`SunEvent` on a given date to its
-concrete datetime (Home Assistant's astral helpers in production, a stub in
-tests).  Everything here is a pure function of ``(config, now, civil_lookup)``.
+Everything here is a function of ``(config, now, civil_lookup)``, where
+``civil_lookup`` resolves a :class:`SunEvent` on a date to its datetime (Home
+Assistant's astral helpers in production, a stub in tests).
 """
 
 from __future__ import annotations
