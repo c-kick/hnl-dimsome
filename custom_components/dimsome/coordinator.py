@@ -46,6 +46,7 @@ from .engine import (
 )
 from .models import (
     ColorMode,
+    ColorTarget,
     LightRuntime,
     LightTarget,
     OverrideResumeMode,
@@ -320,14 +321,14 @@ class DimsomeController:
             return
         if any_active:
             self._cancel_wake_timer()
-        if any_active and self._ramp_unsub is None:
-            self._ramp_unsub = async_track_time_interval(
-                self.hass, self.async_tick, RAMP_INTERVAL
-            )
-        elif not any_active and self._ramp_unsub is not None:
-            self._ramp_unsub()
-            self._ramp_unsub = None
-        if not any_active:
+            if self._ramp_unsub is None:
+                self._ramp_unsub = async_track_time_interval(
+                    self.hass, self.async_tick, RAMP_INTERVAL
+                )
+        else:
+            if self._ramp_unsub is not None:
+                self._ramp_unsub()
+                self._ramp_unsub = None
             self._schedule_wake_timer(now, next_start)
 
     def _cancel_wake_timer(self) -> None:
@@ -645,7 +646,7 @@ def _target_status(target: LightTarget | None) -> dict[str, Any] | None:
     }
 
 
-def _color_status(color: Any | None) -> dict[str, Any] | None:
+def _color_status(color: ColorTarget | None) -> dict[str, Any] | None:
     """Return serializable color diagnostics."""
     if color is None:
         return None
