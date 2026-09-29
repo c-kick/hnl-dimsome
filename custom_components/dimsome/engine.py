@@ -22,12 +22,12 @@ from .models import (
     ScheduleType,
     SequenceKind,
     SunEvent,
-    parse_time as parse_time,  # re-exported; lives in models so validation can use it
+    parse_time,
 )
 
 BRIGHTNESS_TOLERANCE = 2
-_HALF_DAY = 12 * 3600
 COLOR_TEMP_TOLERANCE = 50
+_HALF_DAY = 12 * 3600
 
 #: Resolve a civil sun event on a calendar date to its concrete datetime.
 CivilLookup = Callable[[SunEvent, date], "datetime | None"]
