@@ -326,7 +326,6 @@ class DimsomePanel extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._hass = null;
-    this._panel = null;
     this._narrow = false;
     this._loaded = false;
     this._saving = false;
@@ -359,10 +358,6 @@ class DimsomePanel extends HTMLElement {
     return this._hass;
   }
 
-  set panel(panel) {
-    this._panel = panel;
-  }
-
   set narrow(value) {
     const narrow = Boolean(value);
     if (narrow === this._narrow) return;
@@ -373,10 +368,6 @@ class DimsomePanel extends HTMLElement {
 
   get narrow() {
     return this._narrow;
-  }
-
-  set route(value) {
-    this._route = value;
   }
 
   connectedCallback() {
@@ -892,7 +883,7 @@ class DimsomePanel extends HTMLElement {
     const briStart = startFor(briSched);
 
     return {
-      lat, lon, start, end, rampMin,
+      lat, lon, start, end,
       civilDawn,
       civilDusk,
       dimStart,
@@ -1788,7 +1779,6 @@ class DimsomePanel extends HTMLElement {
 
         /* Reset bare elements — shadow DOM doesn't inherit HA globals */
         h2,
-        h3,
         p {
           margin: 0;
         }
@@ -1852,11 +1842,6 @@ class DimsomePanel extends HTMLElement {
           border-color: var(--primary-color);
           box-shadow: 0 0 0 1px var(--primary-color);
           outline: none;
-        }
-
-        .native-select:disabled {
-          color: var(--disabled-text-color);
-          cursor: not-allowed;
         }
 
         .number-input-wrap {
@@ -1973,7 +1958,6 @@ class DimsomePanel extends HTMLElement {
           margin-bottom: 16px;
         }
 
-        .panel-grid,
         .lights-list {
           display: grid;
           gap: 16px;
