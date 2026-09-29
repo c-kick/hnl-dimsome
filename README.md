@@ -70,7 +70,7 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 - **Apply On Recovery** — re-apply the current target when a light comes back online while already on.
 - **Native Users** — comma-separated Home Assistant user IDs whose light changes are treated as automations rather than manual overrides (useful for Node-RED or other token-based integrations).
 
-<img width="700" alt="Schedule and defaults section: dim at civil dusk but no earlier than 21:00, brighten at civil dawn but no later than 06:40" src="https://github.com/user-attachments/assets/923dd0e7-6a45-4053-810a-6a9c39c35baa" />
+<img width="800" alt="Schedule and defaults section: dim at civil dusk but no earlier than 21:00, brighten at civil dawn but no later than 06:40" src="https://github.com/user-attachments/assets/923dd0e7-6a45-4053-810a-6a9c39c35baa" />
 
 ### Per-light settings
 
@@ -85,11 +85,11 @@ Per-light **enable/pause** is handled by the `Dimsome enabled` switch entity.
 
 Each light card shows a 24-hour brightness profile with today's civil dawn and dusk marked. With color temperature configured, the line is tinted by the target color over the day:
 
-<img width="700" alt="Light card with a brightness profile from 40% at night to 80% by day, tinted from warm to cooler white" src="https://github.com/user-attachments/assets/c83b347f-7842-4d6e-8f97-98abb7ec7b1c" />
+<img width="800" alt="Light card with a brightness profile from 40% at night to 80% by day, tinted from warm to cooler white" src="https://github.com/user-attachments/assets/c83b347f-7842-4d6e-8f97-98abb7ec7b1c" />
 
 A light can override the global timing. Here it brightens by 06:15, ahead of civil dawn at 07:08, while still dimming no earlier than 21:00:
 
-<img width="700" alt="Light card with a custom schedule: brighten at civil dawn but no later than 06:15, dim at civil dusk but no earlier than 21:00" src="https://github.com/user-attachments/assets/10df42c6-872d-413f-8c38-a2c135090ece" />
+<img width="800" alt="Light card with a custom schedule: brighten at civil dawn but no later than 06:15, dim at civil dusk but no earlier than 21:00" src="https://github.com/user-attachments/assets/10df42c6-872d-413f-8c38-a2c135090ece" />
 
 
 ## Entities
