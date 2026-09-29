@@ -13,9 +13,9 @@ It drives configured lights with two daily ramps:
 
 By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn, taken directly from Home Assistant's astral data for the current date. Either ramp can instead use a fixed clock time, which takes precedence over the civil-sun schedule. A civil-sun schedule can also be bounded by a clock time: brighten at civil dawn but no later than 07:00, or dim at civil dusk but no earlier than 21:00.
 
-Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`).
+Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`). Saving settings in the panel keeps these overrides; restarting Home Assistant clears them.
 
-<img width="1101" height="392" alt="image" src="https://github.com/user-attachments/assets/818263b9-fc44-4ae6-b4c0-66ffc9bf7025" alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 07:08 at civil dawn, and the dim ramp at 19:51, at civil dusk - the blue line is the 'now' line (at ~15:13)"/>
+<img width="1101" height="392" src="https://github.com/user-attachments/assets/818263b9-fc44-4ae6-b4c0-66ffc9bf7025" alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 07:08 at civil dawn, and the dim ramp at 19:51, at civil dusk - the blue line is the 'now' line (at ~15:13)"/>
 
 The panel overview plots today's sun elevation with both ramps. Open dots mark civil dawn and dusk, so you can see when a start bound moves a ramp away from the sun event.
 
@@ -159,7 +159,7 @@ dimsome:
 
 A schedule is either `{ type: fixed_time, at: "HH:MM" }` or `{ type: civil_sun, event: civil_dawn | civil_dusk }`.
 
-A civil-sun schedule may add `not_later_than: "HH:MM"` and/or `not_earlier_than: "HH:MM"`. The ramp then starts at the earlier of the civil event and `not_later_than`, and at the later of the civil event and `not_earlier_than`. On a day without the civil event (polar regions), the bound itself is the start. The panel offers `not_later_than` for brightening and `not_earlier_than` for dimming:
+A civil-sun schedule may add `not_later_than: "HH:MM"` and/or `not_earlier_than: "HH:MM"`. The ramp then starts at the earlier of the civil event and `not_later_than`, and at the later of the civil event and `not_earlier_than`. A bound more than 12 hours away from the civil event refers to the neighbouring day, so `not_earlier_than: "00:30"` on a dusk schedule dims at half past midnight that night rather than being ignored. On a day without the civil event (polar regions), the bound itself is the start. The panel offers `not_later_than` for brightening and `not_earlier_than` for dimming:
 
 ```yaml
 brighten_schedule: { type: civil_sun, event: civil_dawn, not_later_than: "07:00" }

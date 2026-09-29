@@ -297,6 +297,18 @@ def test_rejects_duplicate_lights() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "entity_id", ["", "light.", "switch.porch", "light.Porch", "light porch", None]
+)
+def test_rejects_invalid_light_entity_ids(entity_id) -> None:
+    with pytest.raises(ValueError, match="light entity"):
+        resolve_light_configs({"lights": [{
+            "entity_id": entity_id,
+            "min_brightness_pct": 10,
+            "max_brightness_pct": 80,
+        }]})
+
+
 def test_fixed_schedule_reconstructs_mid_ramp() -> None:
     """The active fixed ramp is reconstructed from wall-clock time."""
     now = datetime(2026, 5, 4, 22, 30, tzinfo=TZ)
@@ -587,6 +599,61 @@ def test_fixed_schedule_ignores_limits() -> None:
     )
 
     assert schedule == ScheduleConfig(ScheduleType.FIXED_TIME, at="06:00")
+
+
+def _dim_bound_config(not_earlier_than: str) -> ResolvedLightConfig:
+    return civil_config(
+        dim_schedule=ScheduleConfig(
+            ScheduleType.CIVIL_SUN,
+            event=SunEvent.CIVIL_DUSK,
+            not_earlier_than=not_earlier_than,
+        ),
+    )
+
+
+def test_dim_bound_after_midnight_delays_dimming_to_that_night() -> None:
+    config = _dim_bound_config("00:30")
+    lookup = civil_lookup(dawn=time(7, 0), dusk=time(20, 0))
+
+    assert active_window(config, datetime(2026, 10, 1, 20, 30, tzinfo=TZ), lookup) is None
+    assert target_for_now(
+        config, datetime(2026, 10, 1, 23, 0, tzinfo=TZ), lookup
+    ) == high_plateau_target(config)
+    assert _window_start(config, datetime(2026, 10, 2, 0, 40, tzinfo=TZ), lookup) == (
+        datetime(2026, 10, 2, 0, 30, tzinfo=TZ)
+    )
+
+
+def test_dim_bound_after_midnight_is_scheduled_as_next_wake() -> None:
+    config = _dim_bound_config("00:30")
+    lookup = civil_lookup(dawn=time(7, 0), dusk=time(20, 0))
+
+    assert next_window_start(
+        config, datetime(2026, 10, 1, 21, 0, tzinfo=TZ), lookup
+    ) == datetime(2026, 10, 2, 0, 30, tzinfo=TZ)
+
+
+def test_dim_bound_hours_before_dusk_stays_on_the_same_day() -> None:
+    config = _dim_bound_config("17:00")
+    lookup = civil_lookup(dawn=time(7, 0), dusk=time(20, 0))
+
+    assert _window_start(config, datetime(2026, 10, 1, 20, 10, tzinfo=TZ), lookup) == (
+        datetime(2026, 10, 1, 20, 0, tzinfo=TZ)
+    )
+
+
+def test_brighten_bound_late_evening_refers_to_the_previous_evening() -> None:
+    """Symmetric rule: a not_later_than over 12 h after the event is the day before."""
+    config = civil_config(
+        brighten_schedule=ScheduleConfig(
+            ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN, not_later_than="23:30"
+        ),
+    )
+    lookup = civil_lookup(dawn=time(7, 0), dusk=time(20, 0))
+
+    assert _window_start(config, datetime(2026, 10, 1, 23, 40, tzinfo=TZ), lookup) == (
+        datetime(2026, 10, 1, 23, 30, tzinfo=TZ)
+    )
 
 
 def test_fixed_schedule_uses_elapsed_time_during_fall_back() -> None:

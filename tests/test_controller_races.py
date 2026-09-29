@@ -1,6 +1,7 @@
 """Regressions for manual overrides, asynchronous writes, and shutdown."""
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -271,3 +272,63 @@ def test_dst_wake_timer_uses_elapsed_time(monkeypatch, now, start, expected_dela
     controller._schedule_wake_timer(datetime(*now, tzinfo=tz), datetime(*start, tzinfo=tz))
 
     assert delays == [expected_delay]
+
+
+def test_manual_override_survives_controller_reload():
+    """A panel save reloads the entry; the new controller must keep the override."""
+    old, _ = _controller()
+    old._async_light_changed(_event("on", "on"))
+    assert old.lights["light.test"].stood_down
+
+    new, calls = _controller()
+    new.restore_manual_overrides(old.manual_overrides())
+    asyncio.run(new.async_tick())
+
+    runtime = new.lights["light.test"]
+    assert runtime.stood_down
+    assert runtime.last_decision == "skipped_manual_override"
+    assert calls == []
+
+
+def test_restored_override_from_an_ended_ramp_is_dropped():
+    old, _ = _controller()
+    old._async_light_changed(_event("on", "on"))
+    stale = {
+        entity_id: replace(window, start=window.start - timedelta(days=1),
+                           end=window.end - timedelta(days=1))
+        for entity_id, window in old.manual_overrides().items()
+    }
+
+    new, calls = _controller()
+    new.restore_manual_overrides(stale)
+    asyncio.run(new.async_tick())
+
+    assert not new.lights["light.test"].stood_down
+    assert calls
+
+
+def test_restore_ignores_lights_no_longer_configured_or_disabled():
+    old, _ = _controller([_config(), _config("light.other")])
+    window = coordinator.active_window(
+        old.lights["light.test"].config, coordinator.dt_util.now(), old._civil_lookup
+    )
+    new, _ = _controller([_config(enabled=False)])
+
+    new.restore_manual_overrides({"light.test": window, "light.gone": window})
+
+    assert not new.lights["light.test"].stood_down
+    assert "light.gone" not in new.lights
+
+
+def test_override_handover_is_stashed_on_unload_and_taken_once():
+    from custom_components.dimsome import _stash_manual_overrides, _take_manual_overrides
+
+    old, _ = _controller()
+    old._async_light_changed(_event("on", "on"))
+    hass = SimpleNamespace(data={})
+    entry = SimpleNamespace(entry_id="entry", runtime_data=old)
+
+    _stash_manual_overrides(hass, entry)
+
+    assert set(_take_manual_overrides(hass, "entry")) == {"light.test"}
+    assert _take_manual_overrides(hass, "entry") == {}

@@ -183,6 +183,28 @@ class DimsomeController:
             runtime.stood_down_window = None
         await self.async_tick()
 
+    def manual_overrides(self) -> dict[str, RampWindow]:
+        """Return the ramp window each manually overridden light stood down for."""
+        return {
+            entity_id: runtime.stood_down_window
+            for entity_id, runtime in self.lights.items()
+            if runtime.stood_down and runtime.stood_down_window is not None
+        }
+
+    def restore_manual_overrides(self, overrides: dict[str, RampWindow]) -> None:
+        """Carry manual overrides over from the controller this one replaces.
+
+        A config save reloads the entry; without this the new controller would
+        overwrite lights the user adjusted during the running ramp.  An
+        override for a ramp that has since ended is cleared on the next tick.
+        """
+        for entity_id, window in overrides.items():
+            runtime = self.lights.get(entity_id)
+            if runtime is None or not runtime.config.enabled:
+                continue
+            runtime.stood_down = True
+            runtime.stood_down_window = window
+
     def runtime_status(self, entity_id: str | None = None) -> dict[str, Any]:
         """Return diagnostic runtime state for one light or all lights."""
         now = dt_util.now()

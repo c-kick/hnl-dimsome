@@ -77,6 +77,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
         light_configs,
         native_user_ids=native_user_ids,
     )
+    controller.restore_manual_overrides(_take_manual_overrides(hass, entry.entry_id))
     entry.runtime_data = controller
     await controller.async_start()
     _migrate_per_light_entities(hass, entry.entry_id, controller.lights)
@@ -93,7 +94,24 @@ async def async_unload_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> 
     if not unload_ok:
         return False
     await entry.runtime_data.async_stop()
+    _stash_manual_overrides(hass, entry)
     return True
+
+
+# Manual overrides live only in memory. A reload (every panel save) hands them
+# to the next controller through hass.data; a restart still clears them.
+_OVERRIDE_HANDOVER = "override_handover"
+
+
+def _stash_manual_overrides(hass: HomeAssistant, entry: DimsomeConfigEntry) -> None:
+    """Keep the stopping controller's manual overrides for the next setup."""
+    handover = hass.data.setdefault(DOMAIN, {}).setdefault(_OVERRIDE_HANDOVER, {})
+    handover[entry.entry_id] = entry.runtime_data.manual_overrides()
+
+
+def _take_manual_overrides(hass: HomeAssistant, entry_id: str) -> dict[str, Any]:
+    """Return and forget the overrides stashed for entry_id."""
+    return hass.data.get(DOMAIN, {}).get(_OVERRIDE_HANDOVER, {}).pop(entry_id, {})
 
 
 def _migrate_per_light_entities(

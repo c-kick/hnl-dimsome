@@ -67,7 +67,7 @@ const durationToMinutes = (value, fallback = 60) => {
 };
 
 const minutesToDuration = (value) => {
-  const minutes = Math.max(1, Number(value) || 1);
+  const minutes = Math.max(1, Math.round(Number(value)) || 1);
   const hours = Math.floor(minutes / 60);
   const remainder = minutes % 60;
   return `${String(hours).padStart(2, "0")}:${String(remainder).padStart(2, "0")}:00`;
@@ -855,19 +855,38 @@ class DimsomePanel extends HTMLElement {
     const civilDawn = findElevationCrossing(lat, lon, start, end, -6, "ascending");
     const civilDusk = findElevationCrossing(lat, lon, start, end, -6, "descending");
     // Mirrors engine.schedule_start: a civil start is clamped by its optional
-    // bounds, and a bound alone is used on a day without the civil event.
+    // bounds, and a bound alone is used on a day without the civil event. A
+    // bound over 12 h from the event belongs to the neighbouring day.
+    const HALF_DAY = 12 * 3_600_000;
+    const boundNear = (at, event) => {
+      const bound = timeOfDayToday(at, now);
+      if (!event) return bound;
+      if (bound - event < -HALF_DAY) bound.setDate(bound.getDate() + 1);
+      else if (bound - event > HALF_DAY) bound.setDate(bound.getDate() - 1);
+      return bound;
+    };
+    // The chart shows one clock day, so a start that lands on the next or
+    // previous day (e.g. dim at 00:30 tonight) is drawn at its clock time today.
+    const onToday = (at) => {
+      if (!at) return at;
+      const shifted = new Date(at);
+      if (shifted > end) shifted.setDate(shifted.getDate() - 1);
+      else if (shifted < start) shifted.setDate(shifted.getDate() + 1);
+      return shifted;
+    };
     const startFor = (schedule) => {
       if (schedule.type === "fixed_time") return timeOfDayToday(schedule.at, now);
-      let at = schedule.event === "civil_dusk" ? civilDusk : civilDawn;
+      const event = schedule.event === "civil_dusk" ? civilDusk : civilDawn;
+      let at = event;
       if (schedule.not_later_than) {
-        const latest = timeOfDayToday(schedule.not_later_than, now);
+        const latest = boundNear(schedule.not_later_than, event);
         if (!at || latest < at) at = latest;
       }
       if (schedule.not_earlier_than) {
-        const earliest = timeOfDayToday(schedule.not_earlier_than, now);
+        const earliest = boundNear(schedule.not_earlier_than, event);
         if (!at || earliest > at) at = earliest;
       }
-      return at;
+      return onToday(at);
     };
     const dimStart = startFor(dimSched);
     const briStart = startFor(briSched);

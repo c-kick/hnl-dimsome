@@ -26,6 +26,7 @@ from .models import (
 )
 
 BRIGHTNESS_TOLERANCE = 2
+_HALF_DAY = 12 * 3600
 COLOR_TEMP_TOLERANCE = 50
 
 #: Resolve a civil sun event on a calendar date to its concrete datetime.
@@ -77,22 +78,38 @@ def schedule_start(
     """Return the concrete start datetime for a schedule on day.
 
     A civil-sun start is clamped by the schedule's optional bounds; on a day
-    without the civil event the bound itself is the start.
+    without the civil event the bound itself is the start.  A bound more than
+    half a day away from the event belongs to the neighbouring day, so "dim no
+    earlier than 00:30" means the night after that evening's dusk.
     """
     if schedule.type is ScheduleType.FIXED_TIME:
         assert schedule.at is not None
         return _clock_time_on(schedule.at, day)
     assert schedule.event is not None
-    start = civil_lookup(schedule.event, day.date())
+    event = civil_lookup(schedule.event, day.date())
+    start = event
     if schedule.not_later_than is not None:
-        latest = _clock_time_on(schedule.not_later_than, day)
+        latest = _bound_near(schedule.not_later_than, day, event)
         if start is None or latest.timestamp() < start.timestamp():
             start = latest
     if schedule.not_earlier_than is not None:
-        earliest = _clock_time_on(schedule.not_earlier_than, day)
+        earliest = _bound_near(schedule.not_earlier_than, day, event)
         if start is None or earliest.timestamp() > start.timestamp():
             start = earliest
     return start
+
+
+def _bound_near(at: str, day: datetime, event: datetime | None) -> datetime:
+    """Return the bound's clock time on the day within 12 hours of event."""
+    bound = _clock_time_on(at, day)
+    if event is None:
+        return bound
+    offset = bound.timestamp() - event.timestamp()
+    if offset < -_HALF_DAY:
+        return _clock_time_on(at, day + timedelta(days=1))
+    if offset > _HALF_DAY:
+        return _clock_time_on(at, day - timedelta(days=1))
+    return bound
 
 
 def _clock_time_on(at: str, day: datetime) -> datetime:

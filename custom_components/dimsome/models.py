@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from enum import StrEnum
@@ -222,6 +223,10 @@ def _optional_limit(value: dict[str, Any], key: str) -> str | None:
     return limit
 
 
+# Home Assistant's entity id rules (helpers valid_entity_id), light domain only.
+_LIGHT_ENTITY_ID = re.compile(r"^light\.(?!_)(?!.*__)[\da-z_]+(?<!_)$")
+
+
 def _require_brightness(value: Any, name: str) -> int:
     brightness = int(value)
     if brightness < 1 or brightness > 100:
@@ -258,7 +263,11 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
     for light in light_configs:
         if not isinstance(light, dict):
             raise ValueError("Each light must be an object")
-        entity_id = str(light[CONF_ENTITY_ID])
+        entity_id = light.get(CONF_ENTITY_ID)
+        if not isinstance(entity_id, str) or not _LIGHT_ENTITY_ID.match(entity_id):
+            raise ValueError(
+                f"{entity_id!r} is not a light entity id (expected light.<name>)"
+            )
         if entity_id in seen:
             raise ValueError(f"Duplicate Dimsome light: {entity_id}")
         seen.add(entity_id)
