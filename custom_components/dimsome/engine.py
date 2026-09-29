@@ -74,36 +74,54 @@ def schedule_start(
     day: datetime,
     civil_lookup: CivilLookup,
 ) -> datetime | None:
-    """Return the concrete start datetime for a schedule on day."""
+    """Return the concrete start datetime for a schedule on day.
+
+    A civil-sun start is clamped by the schedule's optional bounds; on a day
+    without the civil event the bound itself is the start.
+    """
     if schedule.type is ScheduleType.FIXED_TIME:
         assert schedule.at is not None
-        naive = datetime.combine(day.date(), parse_time(schedule.at))
-        if day.tzinfo is None:
-            return naive
-        candidates = [naive.replace(tzinfo=day.tzinfo, fold=fold) for fold in (0, 1)]
-        valid = [
-            candidate
-            for candidate in candidates
-            if datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
+        return _clock_time_on(schedule.at, day)
+    assert schedule.event is not None
+    start = civil_lookup(schedule.event, day.date())
+    if schedule.not_later_than is not None:
+        latest = _clock_time_on(schedule.not_later_than, day)
+        if start is None or latest.timestamp() < start.timestamp():
+            start = latest
+    if schedule.not_earlier_than is not None:
+        earliest = _clock_time_on(schedule.not_earlier_than, day)
+        if start is None or earliest.timestamp() > start.timestamp():
+            start = earliest
+    return start
+
+
+def _clock_time_on(at: str, day: datetime) -> datetime:
+    """Return the wall-clock time at on day's date, normalized across DST gaps."""
+    naive = datetime.combine(day.date(), parse_time(at))
+    if day.tzinfo is None:
+        return naive
+    candidates = [naive.replace(tzinfo=day.tzinfo, fold=fold) for fold in (0, 1)]
+    valid = [
+        candidate
+        for candidate in candidates
+        if datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
+            tzinfo=None
+        )
+        == naive
+    ]
+    if valid:
+        return min(valid, key=lambda candidate: candidate.fold)
+    normalized = min(
+        candidates,
+        key=lambda candidate: (
+            datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
                 tzinfo=None
             )
-            == naive
-        ]
-        if valid:
-            return min(valid, key=lambda candidate: candidate.fold)
-        normalized = min(
-            candidates,
-            key=lambda candidate: (
-                datetime.fromtimestamp(candidate.timestamp(), tz=day.tzinfo).replace(
-                    tzinfo=None
-                )
-                < naive,
-                candidate.astimezone(UTC),
-            ),
-        )
-        return datetime.fromtimestamp(normalized.timestamp(), tz=day.tzinfo)
-    assert schedule.event is not None
-    return civil_lookup(schedule.event, day.date())
+            < naive,
+            candidate.astimezone(UTC),
+        ),
+    )
+    return datetime.fromtimestamp(normalized.timestamp(), tz=day.tzinfo)
 
 
 def candidate_windows(
@@ -217,7 +235,7 @@ def target_for_window(config: ResolvedLightConfig, window: RampWindow, now: date
         color = interpolate_color(config.max_color, config.min_color, progress)
     else:
         brightness = interpolate(
-            config.brighten_min_pct, config.brighten_max_pct, progress
+            config.min_brightness_pct, config.max_brightness_pct, progress
         )
         color = interpolate_color(config.min_color, config.max_color, progress)
     return LightTarget(brightness_pct=brightness, color=color)
@@ -230,7 +248,7 @@ def low_plateau_target(config: ResolvedLightConfig) -> LightTarget:
 
 def high_plateau_target(config: ResolvedLightConfig) -> LightTarget:
     """Return the target for the high plateau."""
-    return LightTarget(config.brighten_max_pct, config.max_color)
+    return LightTarget(config.max_brightness_pct, config.max_color)
 
 
 def target_for_now(

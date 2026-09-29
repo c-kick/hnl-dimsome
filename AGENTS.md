@@ -29,6 +29,7 @@ Dimsome is a simple two-ramp controller:
 - Brighten at civil dawn by default.
 - A configured fixed time for dimming completely overrides civil dusk; dimming always starts at that time.
 - A configured fixed time for brightening completely overrides civil dawn; brightening always starts at that time.
+- A civil-sun schedule may carry clock-time bounds: `not_later_than` (start at the earlier of the civil event and that time) and `not_earlier_than` (start at the later of the two). Without the civil event on a date, the bound is the start.
 - If a light is manually touched during a dim or brighten ramp, Dimsome must not touch that light again for the remainder of that same ramp.
 - If a light turns on after the end of a dusk ramp and before the start of the next dawn/brighten ramp, Dimsome must apply the low/night target.
 - If a light turns on after the end of a dawn/brighten ramp and before the start of the next dusk/dim ramp, Dimsome must apply the high/day target.

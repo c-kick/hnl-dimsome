@@ -11,7 +11,7 @@ It drives configured lights with two daily ramps:
 - a **dim** ramp from the day target down to the night target
 - a **brighten** ramp from the night target up to the day target
 
-By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn, taken directly from Home Assistant's astral data for the current date. Either ramp can instead use a fixed clock time, which takes precedence over the civil-sun schedule.
+By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn, taken directly from Home Assistant's astral data for the current date. Either ramp can instead use a fixed clock time, which takes precedence over the civil-sun schedule. A civil-sun schedule can also be bounded by a clock time: brighten at civil dawn but no later than 07:00, or dim at civil dusk but no earlier than 21:00.
 
 Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`).
 
@@ -58,7 +58,7 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 
 ### Global settings
 
-- **Dimming** / **Brightening** schedule — civil sun (`civil_dusk` / `civil_dawn`) or a fixed time.
+- **Dimming** / **Brightening** schedule — civil sun (`civil_dusk` / `civil_dawn`) or a fixed time. A civil-sun dimming schedule takes an optional *start no earlier than* time; a brightening schedule takes an optional *start no later than* time. The per-light brightness profile marks today's civil dawn and dusk so the effect of a bound is visible.
 - **Ramp Duration** — how long each transition takes.
 - **Override Resume** — how control returns after a manual change: `Manual Only` or `After Grace Period`.
 - **Grace Period** — delay before automatic resume (used by `After Grace Period`).
@@ -70,7 +70,6 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 
 - **Light Entity** — the light to control.
 - **Minimum / Maximum Brightness** — night and day targets, as a percentage from `1` to `100` (converted internally to Home Assistant's `1`–`255` scale).
-- **Separate dawn levels** (optional) — a different minimum/maximum for the brighten ramp, e.g. a shallower, brighter morning. The panel shows a 24-hour brightness profile per light so the effect is visible before saving.
 - **Adjust Color Temperature** — optional minimum/maximum `color_temp_kelvin` targets (color support is intentionally limited to color temperature).
 - **Split Brightness & Color Calls**, **Apply On Recovery** — per-light overrides of the global toggles.
 - **Settle Delay** — wait after a light turns on before applying its target.
@@ -134,7 +133,6 @@ dimsome:
     - entity_id: light.hallway
       min_brightness_pct: 20
       max_brightness_pct: 100
-      brighten_min_brightness_pct: 50      # optional: brighter start at dawn
       ramp_duration: "00:30:00"
       override_resume_mode: after_grace_period
       override_grace_period: "00:15:00"
@@ -146,7 +144,12 @@ dimsome:
 
 A schedule is either `{ type: fixed_time, at: "HH:MM" }` or `{ type: civil_sun, event: civil_dawn | civil_dusk }`.
 
-`brighten_min_brightness_pct` and `brighten_max_brightness_pct` are optional per-light levels for the brighten (dawn) ramp. Each falls back to `min_brightness_pct` / `max_brightness_pct` when unset. The brighten ramp runs from the brighten minimum to the brighten maximum, and the brighten maximum holds through the day. The dim ramp always runs from `max_brightness_pct` to `min_brightness_pct`, which also holds through the night. If the night level and the dawn start level differ, the light steps to the dawn start level when the brighten ramp begins.
+A civil-sun schedule may add `not_later_than: "HH:MM"` and/or `not_earlier_than: "HH:MM"`. The ramp then starts at the earlier of the civil event and `not_later_than`, and at the later of the civil event and `not_earlier_than`. On a day without the civil event (polar regions), the bound itself is the start. The panel offers `not_later_than` for brightening and `not_earlier_than` for dimming:
+
+```yaml
+brighten_schedule: { type: civil_sun, event: civil_dawn, not_later_than: "07:00" }
+dim_schedule: { type: civil_sun, event: civil_dusk, not_earlier_than: "21:00" }
+```
 
 ## Development
 

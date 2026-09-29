@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -373,50 +372,6 @@ def test_civil_dawn_brighten_ramps_up_from_minimum() -> None:
     ).brightness_pct == 80
 
 
-def test_brighten_levels_shape_dawn_ramp_and_day_plateau() -> None:
-    """Separate brighten levels drive the dawn ramp and the day that follows."""
-    config = replace(
-        fixed_config(), brighten_min_brightness_pct=40, brighten_max_brightness_pct=100
-    )
-
-    # Dawn ramp 06:00-07:00 runs 40 -> 100 instead of 10 -> 80.
-    assert target_for_now(config, datetime(2026, 5, 5, 6, 0, tzinfo=TZ), no_civil).brightness_pct == 40
-    assert target_for_now(config, datetime(2026, 5, 5, 6, 30, tzinfo=TZ), no_civil).brightness_pct == 70
-    assert target_for_now(config, datetime(2026, 5, 5, 12, 0, tzinfo=TZ), no_civil).brightness_pct == 100
-    # Dusk ramp and night keep the regular levels.
-    assert target_for_now(config, datetime(2026, 5, 5, 22, 30, tzinfo=TZ), no_civil).brightness_pct == 45
-    assert target_for_now(config, datetime(2026, 5, 6, 1, 0, tzinfo=TZ), no_civil).brightness_pct == 10
-
-
-def test_brighten_levels_fall_back_independently() -> None:
-    """Setting only one brighten level keeps the other at the regular value."""
-    config = replace(fixed_config(), brighten_min_brightness_pct=30)
-
-    assert config.brighten_min_pct == 30
-    assert config.brighten_max_pct == 80
-
-
-def test_resolves_and_validates_brighten_levels() -> None:
-    """Brighten levels are optional, range-checked and must not invert."""
-    def resolve(**levels: object) -> ResolvedLightConfig:
-        return resolve_light_configs({"lights": [{
-            "entity_id": "light.test",
-            "min_brightness_pct": 10,
-            "max_brightness_pct": 80,
-            **levels,
-        }]})[0]
-
-    assert resolve().brighten_min_brightness_pct is None
-    assert resolve(brighten_min_brightness_pct="").brighten_min_brightness_pct is None
-    resolved = resolve(brighten_min_brightness_pct=40, brighten_max_brightness_pct=100)
-    assert (resolved.brighten_min_pct, resolved.brighten_max_pct) == (40, 100)
-    with pytest.raises(ValueError, match="brighten_max_brightness_pct"):
-        resolve(brighten_max_brightness_pct=101)
-    # Only the minimum is set, above the regular maximum it would ramp to.
-    with pytest.raises(ValueError, match="brighten minimum"):
-        resolve(brighten_min_brightness_pct=90)
-
-
 def test_civil_day_is_high_plateau_after_dawn_ramp() -> None:
     """Between the dawn ramp and the dusk ramp Dimsome holds the day target."""
     config = civil_config()
@@ -500,6 +455,138 @@ def test_missing_civil_time_yields_no_target() -> None:
 
     assert active_window(config, now, lookup) is None
     assert target_for_now(config, now, lookup) is None
+
+
+def limited_config() -> ResolvedLightConfig:
+    """Brighten at civil dawn but by 07:00; dim at civil dusk but not before 21:00."""
+    return civil_config(
+        dim_schedule=ScheduleConfig(
+            ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DUSK, not_earlier_than="21:00"
+        ),
+        brighten_schedule=ScheduleConfig(
+            ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN, not_later_than="07:00"
+        ),
+    )
+
+
+def _window_start(config, now, lookup):
+    window = active_window(config, now, lookup)
+    assert window is not None
+    return window.start
+
+
+def test_not_later_than_wins_over_late_dawn() -> None:
+    lookup = civil_lookup(dawn=time(7, 40), dusk=time(22, 0))
+    now = datetime(2026, 12, 1, 7, 10, tzinfo=TZ)
+
+    assert _window_start(limited_config(), now, lookup) == datetime(
+        2026, 12, 1, 7, 0, tzinfo=TZ
+    )
+
+
+def test_early_dawn_wins_over_not_later_than() -> None:
+    lookup = civil_lookup(dawn=time(6, 15), dusk=time(22, 0))
+    now = datetime(2026, 5, 1, 6, 20, tzinfo=TZ)
+
+    assert _window_start(limited_config(), now, lookup) == datetime(
+        2026, 5, 1, 6, 15, tzinfo=TZ
+    )
+
+
+def test_not_earlier_than_wins_over_early_dusk() -> None:
+    config = limited_config()
+    lookup = civil_lookup(dawn=time(7, 40), dusk=time(18, 30))
+
+    assert target_for_now(
+        config, datetime(2026, 12, 1, 19, 0, tzinfo=TZ), lookup
+    ) == high_plateau_target(config)
+    assert _window_start(config, datetime(2026, 12, 1, 21, 10, tzinfo=TZ), lookup) == (
+        datetime(2026, 12, 1, 21, 0, tzinfo=TZ)
+    )
+
+
+def test_late_dusk_wins_over_not_earlier_than() -> None:
+    lookup = civil_lookup(dawn=time(5, 0), dusk=time(22, 10))
+    now = datetime(2026, 6, 1, 22, 20, tzinfo=TZ)
+
+    assert _window_start(limited_config(), now, lookup) == datetime(
+        2026, 6, 1, 22, 10, tzinfo=TZ
+    )
+
+
+def test_limit_time_is_used_when_there_is_no_civil_event() -> None:
+    lookup = civil_lookup(dawn=None, dusk=None)
+
+    assert _window_start(
+        limited_config(), datetime(2026, 6, 21, 7, 10, tzinfo=TZ), lookup
+    ) == datetime(2026, 6, 21, 7, 0, tzinfo=TZ)
+    assert _window_start(
+        limited_config(), datetime(2026, 6, 21, 21, 10, tzinfo=TZ), lookup
+    ) == datetime(2026, 6, 21, 21, 0, tzinfo=TZ)
+
+
+def test_limit_time_normalizes_nonexistent_spring_time() -> None:
+    config = civil_config(
+        brighten_schedule=ScheduleConfig(
+            ScheduleType.CIVIL_SUN, event=SunEvent.CIVIL_DAWN, not_later_than="02:30"
+        ),
+    )
+    lookup = civil_lookup(dawn=time(6, 0), dusk=time(20, 0))
+    now = datetime(2026, 3, 29, 3, 40, tzinfo=TZ)
+
+    assert _window_start(config, now, lookup) == datetime(2026, 3, 29, 3, 30, tzinfo=TZ)
+
+
+def test_resolves_schedule_limits_from_global_and_light() -> None:
+    configs = resolve_light_configs({
+        "global": {
+            "dim_schedule": {
+                "type": "civil_sun", "event": "civil_dusk", "not_earlier_than": "21:00",
+            },
+            "brighten_schedule": {
+                "type": "civil_sun", "event": "civil_dawn", "not_later_than": "07:00",
+            },
+        },
+        "lights": [
+            {"entity_id": "light.a", "min_brightness_pct": 10, "max_brightness_pct": 80},
+            {
+                "entity_id": "light.b",
+                "min_brightness_pct": 10,
+                "max_brightness_pct": 80,
+                "brighten_schedule": {
+                    "type": "civil_sun", "event": "civil_dawn", "not_later_than": "06:30",
+                },
+            },
+        ],
+    })
+
+    assert configs[0].dim_schedule.not_earlier_than == "21:00"
+    assert configs[0].brighten_schedule.not_later_than == "07:00"
+    assert configs[1].dim_schedule.not_earlier_than == "21:00"
+    assert configs[1].brighten_schedule.not_later_than == "06:30"
+
+
+def test_empty_schedule_limit_means_no_limit() -> None:
+    schedule = parse_schedule(
+        {"type": "civil_sun", "event": "civil_dawn", "not_later_than": ""}
+    )
+
+    assert schedule.not_later_than is None
+
+
+def test_rejects_invalid_schedule_limit() -> None:
+    with pytest.raises(ValueError, match="not_later_than"):
+        parse_schedule(
+            {"type": "civil_sun", "event": "civil_dawn", "not_later_than": "25:00"}
+        )
+
+
+def test_fixed_schedule_ignores_limits() -> None:
+    schedule = parse_schedule(
+        {"type": "fixed_time", "at": "06:00", "not_later_than": "07:00"}
+    )
+
+    assert schedule == ScheduleConfig(ScheduleType.FIXED_TIME, at="06:00")
 
 
 def test_fixed_schedule_uses_elapsed_time_during_fall_back() -> None:

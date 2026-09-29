@@ -9,8 +9,6 @@ from typing import Any
 
 from .const import (
     CONF_ENTITY_ID,
-    CONF_BRIGHTEN_MAX_BRIGHTNESS_PCT,
-    CONF_BRIGHTEN_MIN_BRIGHTNESS_PCT,
     CONF_BRIGHTEN_SCHEDULE,
     CONF_DIM_SCHEDULE,
     CONF_ENABLED,
@@ -79,6 +77,10 @@ class ScheduleConfig:
     type: ScheduleType
     at: str | None = None
     event: SunEvent | None = None
+    # Optional clock-time bounds on a civil-sun start: brighten "no later
+    # than" 07:00, dim "no earlier than" 21:00.  Ignored for fixed times.
+    not_later_than: str | None = None
+    not_earlier_than: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,24 +101,6 @@ class ResolvedLightConfig:
     split_turn_on_calls: bool
     apply_on_recovered_on: bool
     settle_delay: timedelta = timedelta(milliseconds=500)
-    # Optional separate levels for the brighten (dawn) ramp and the day
-    # plateau that follows it; None falls back to min/max_brightness_pct.
-    brighten_min_brightness_pct: int | None = None
-    brighten_max_brightness_pct: int | None = None
-
-    @property
-    def brighten_min_pct(self) -> int:
-        """Effective brightness at the start of the brighten ramp."""
-        if self.brighten_min_brightness_pct is None:
-            return self.min_brightness_pct
-        return self.brighten_min_brightness_pct
-
-    @property
-    def brighten_max_pct(self) -> int:
-        """Effective brightness at the end of the brighten ramp (day plateau)."""
-        if self.brighten_max_brightness_pct is None:
-            return self.max_brightness_pct
-        return self.brighten_max_brightness_pct
 
 
 @dataclass(frozen=True)
@@ -217,7 +201,25 @@ def parse_schedule(value: Any) -> ScheduleConfig:
             ) from err
         return ScheduleConfig(type=schedule_type, at=at)
     event = SunEvent(value.get("event"))
-    return ScheduleConfig(type=schedule_type, event=event)
+    return ScheduleConfig(
+        type=schedule_type,
+        event=event,
+        not_later_than=_optional_limit(value, "not_later_than"),
+        not_earlier_than=_optional_limit(value, "not_earlier_than"),
+    )
+
+
+def _optional_limit(value: dict[str, Any], key: str) -> str | None:
+    limit = value.get(key)
+    if limit is None or limit == "":
+        return None
+    try:
+        parse_time(limit)
+    except (AttributeError, TypeError, ValueError) as err:
+        raise ValueError(
+            f"Invalid {key} time {limit!r}: must be HH:MM or HH:MM:SS"
+        ) from err
+    return limit
 
 
 def _require_brightness(value: Any, name: str) -> int:
@@ -225,12 +227,6 @@ def _require_brightness(value: Any, name: str) -> int:
     if brightness < 1 or brightness > 100:
         raise ValueError(f"{name} must be between 1 and 100")
     return brightness
-
-
-def _optional_brightness(value: Any, name: str) -> int | None:
-    if value is None or value == "":
-        return None
-    return _require_brightness(value, name)
 
 
 def resolve_native_user_ids(config: dict[str, Any]) -> frozenset[str]:
@@ -275,18 +271,6 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
         )
         if min_brightness > max_brightness:
             raise ValueError("min_brightness_pct must be <= max_brightness_pct")
-        brighten_min = _optional_brightness(
-            light.get(CONF_BRIGHTEN_MIN_BRIGHTNESS_PCT), CONF_BRIGHTEN_MIN_BRIGHTNESS_PCT
-        )
-        brighten_max = _optional_brightness(
-            light.get(CONF_BRIGHTEN_MAX_BRIGHTNESS_PCT), CONF_BRIGHTEN_MAX_BRIGHTNESS_PCT
-        )
-        effective_brighten_min = min_brightness if brighten_min is None else brighten_min
-        effective_brighten_max = max_brightness if brighten_max is None else brighten_max
-        if effective_brighten_min > effective_brighten_max:
-            raise ValueError(
-                f"{entity_id}: brighten minimum brightness must be <= brighten maximum"
-            )
 
         ramp_duration = parse_duration(
             light.get(CONF_RAMP_DURATION, global_config.get(CONF_RAMP_DURATION)),
@@ -364,8 +348,6 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                     )
                 ),
                 settle_delay=settle_delay,
-                brighten_min_brightness_pct=brighten_min,
-                brighten_max_brightness_pct=brighten_max,
             )
         )
     return resolved

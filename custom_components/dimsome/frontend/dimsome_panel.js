@@ -120,6 +120,12 @@ const setPath = (object, path, value) => {
   current[parts.at(-1)] = value;
 };
 
+const deletePath = (object, path) => {
+  const parts = path.split(".");
+  const parent = getPath(object, parts.slice(0, -1).join("."));
+  if (parent) delete parent[parts.at(-1)];
+};
+
 const selectHtml = ({ path, value, options, renderOnChange }) => {
   const opts = options.map(([v, l]) => (
     `<option value="${escapeHtml(v)}"${v === value ? " selected" : ""}>${escapeHtml(l)}</option>`
@@ -156,13 +162,20 @@ const formatTime = (date) =>
 const formatScheduleSummary = (schedule) => {
   if (!schedule) return "";
   if (schedule.type === "fixed_time") return schedule.at || "fixed time";
-  if (schedule.event === "civil_dawn") return "civil dawn";
-  if (schedule.event === "civil_dusk") return "civil dusk";
-  return schedule.event || schedule.type || "";
+  const event = { civil_dawn: "civil dawn", civil_dusk: "civil dusk" }[schedule.event]
+    || schedule.event || schedule.type || "";
+  if (schedule.not_later_than) return `${event}, by ${schedule.not_later_than.slice(0, 5)}`;
+  if (schedule.not_earlier_than) return `${event}, not before ${schedule.not_earlier_than.slice(0, 5)}`;
+  return event;
 };
 
 const defaultFixedTimeForPath = (path) => (
   path.includes("dim_schedule") ? "20:00:00" : "06:00:00"
+);
+
+// Brightening may be pulled earlier, dimming pushed later; empty means none.
+const scheduleLimitKey = (path) => (
+  path.includes("dim_schedule") ? "not_earlier_than" : "not_later_than"
 );
 
 const defaultCivilEventForPath = (path) => (
@@ -214,27 +227,11 @@ const findElevationCrossing = (lat, lon, start, end, threshold, direction) => {
   return null;
 };
 
-const BRIGHTEN_LEVEL_KEYS = ["brighten_min_brightness_pct", "brighten_max_brightness_pct"];
-
-const hasBrightenLevels = (light) => BRIGHTEN_LEVEL_KEYS.some(
-  (key) => light[key] !== undefined && light[key] !== null && light[key] !== ""
-);
-
-// Effective levels, mirroring ResolvedLightConfig.brighten_min_pct/max_pct.
 const brightnessLevels = (light) => {
-  const min = clampPct(light.min_brightness_pct, 10);
-  const max = clampPct(light.max_brightness_pct, 80);
-  const pick = (key, fallback) => (
-    light[key] === undefined || light[key] === null || light[key] === ""
-      ? fallback
-      : clampPct(light[key], fallback)
-  );
   const hasColor = Boolean(light.min_color && light.max_color);
   return {
-    min,
-    max,
-    briMin: pick("brighten_min_brightness_pct", min),
-    briMax: pick("brighten_max_brightness_pct", max),
+    min: clampPct(light.min_brightness_pct, 10),
+    max: clampPct(light.max_brightness_pct, 80),
     kMin: hasColor ? Number(light.min_color.value) || 2200 : null,
     kMax: hasColor ? Number(light.max_color.value) || 4000 : null,
   };
@@ -252,8 +249,8 @@ const brightnessProfile = (levels, windows, dayStart) => {
       ramps.push({
         s: windows.briStart.getTime() + shift,
         e: windows.briEnd.getTime() + shift,
-        from: levels.briMin,
-        to: levels.briMax,
+        from: levels.min,
+        to: levels.max,
         kFrom: levels.kMin,
         kTo: levels.kMax,
       });
@@ -481,17 +478,7 @@ class DimsomePanel extends HTMLElement {
     } catch (_) {
       return;
     }
-    const replace = (current, html) => {
-      if (!current) return;
-      const wrapper = document.createElement("div");
-      wrapper.innerHTML = html;
-      const fresh = wrapper.firstElementChild;
-      if (fresh) {
-        current.replaceWith(fresh);
-        this._hydrateNativeComponents(fresh);
-      }
-    };
-    replace(this.shadowRoot?.querySelector(".hero-card"), this._renderHero());
+    this._refreshHero();
     // Only touch the live bits of each card; replacing whole cards would
     // collapse open panels and steal focus from inputs.
     this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
@@ -503,6 +490,18 @@ class DimsomePanel extends HTMLElement {
       if (chips) chips.innerHTML = this._renderChips(light);
     });
     this._refreshProfiles();
+  }
+
+  _refreshHero() {
+    const current = this.shadowRoot?.querySelector(".hero-card");
+    if (!current) return;
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = this._renderHero();
+    const fresh = wrapper.firstElementChild;
+    if (fresh) {
+      current.replaceWith(fresh);
+      this._hydrateNativeComponents(fresh);
+    }
   }
 
   _refreshProfiles(index = null) {
@@ -582,26 +581,20 @@ class DimsomePanel extends HTMLElement {
       if (control.dataset.list === "csv") {
         value = String(value).split(",").map((part) => part.trim()).filter(Boolean);
       }
-      setPath(this._config, control.dataset.path, value);
+      if ("optional" in control.dataset && value === "") {
+        deletePath(this._config, control.dataset.path);
+      } else {
+        setPath(this._config, control.dataset.path, value);
+      }
       this._normalizeScheduleForPath(control.dataset.path);
       if (control.dataset.renderOnChange || control.dataset.path.endsWith(".type")) {
         this._render();
         return;
       }
       const lightMatch = control.dataset.path.match(/^lights\.(\d+)\./);
+      if (!lightMatch) this._refreshHero();
       this._refreshProfiles(lightMatch ? Number(lightMatch[1]) : null);
       this._updateDirtyUi();
-      return;
-    }
-    if ("brightenToggle" in control.dataset) {
-      const light = this._config.lights[Number(control.dataset.brightenToggle)];
-      if (control.checked) {
-        light.brighten_min_brightness_pct = light.min_brightness_pct ?? 10;
-        light.brighten_max_brightness_pct = light.max_brightness_pct ?? 80;
-      } else {
-        BRIGHTEN_LEVEL_KEYS.forEach((key) => delete light[key]);
-      }
-      this._render();
       return;
     }
     if ("colorToggle" in control.dataset) {
@@ -642,6 +635,8 @@ class DimsomePanel extends HTMLElement {
     if (schedule.type === "fixed_time") {
       schedule.at ||= defaultFixedTimeForPath(schedulePath);
       delete schedule.event;
+      delete schedule.not_later_than;
+      delete schedule.not_earlier_than;
     } else {
       schedule.event ||= defaultCivilEventForPath(schedulePath);
       delete schedule.at;
@@ -767,7 +762,7 @@ class DimsomePanel extends HTMLElement {
 
     // Bind all data controls
     root
-      .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle], [data-brighten-toggle]")
+      .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle]")
       .forEach((control) => this._bindControl(control));
 
     // After prepending a new light, smooth-scroll it into view.
@@ -846,15 +841,30 @@ class DimsomePanel extends HTMLElement {
     const briSched = light?.brighten_schedule || global.brighten_schedule || {};
     const rampMin = durationToMinutes(light?.ramp_duration || global.ramp_duration || "01:00:00", 60);
 
-    const dimStart = dimSched.type === "fixed_time"
-      ? timeOfDayToday(dimSched.at, now)
-      : findElevationCrossing(lat, lon, start, end, -6, "descending");
-    const briStart = briSched.type === "fixed_time"
-      ? timeOfDayToday(briSched.at, now)
-      : findElevationCrossing(lat, lon, start, end, -6, "ascending");
+    const civilDawn = findElevationCrossing(lat, lon, start, end, -6, "ascending");
+    const civilDusk = findElevationCrossing(lat, lon, start, end, -6, "descending");
+    // Mirrors engine.schedule_start: a civil start is clamped by its optional
+    // bounds, and a bound alone is used on a day without the civil event.
+    const startFor = (schedule) => {
+      if (schedule.type === "fixed_time") return timeOfDayToday(schedule.at, now);
+      let at = schedule.event === "civil_dusk" ? civilDusk : civilDawn;
+      if (schedule.not_later_than) {
+        const latest = timeOfDayToday(schedule.not_later_than, now);
+        if (!at || latest < at) at = latest;
+      }
+      if (schedule.not_earlier_than) {
+        const earliest = timeOfDayToday(schedule.not_earlier_than, now);
+        if (!at || earliest > at) at = earliest;
+      }
+      return at;
+    };
+    const dimStart = startFor(dimSched);
+    const briStart = startFor(briSched);
 
     return {
       lat, lon, start, end, rampMin,
+      civilDawn,
+      civilDusk,
       dimStart,
       dimEnd: dimStart ? new Date(dimStart.getTime() + rampMin * 60_000) : null,
       briStart,
@@ -923,6 +933,17 @@ class DimsomePanel extends HTMLElement {
       `;
     };
 
+    // Civil dawn/dusk sit where the sun path crosses the −6° line; they stay
+    // visible when a start bound moves the ramp away from them.
+    const civilMarker = (date, name) => {
+      if (!date) return "";
+      const x = tToX(date.getTime()).toFixed(1);
+      return `
+        <circle class="civil-dot" cx="${x}" cy="${twilightY.toFixed(1)}" r="4"/>
+        <text class="civil-label" x="${x}" y="${(twilightY + 16).toFixed(1)}" text-anchor="middle">Civil ${name} ${formatTime(date)}</text>
+      `;
+    };
+
     return `
       <svg class="sun-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Sun elevation and Dimsome schedule for today">
         <defs>
@@ -939,11 +960,13 @@ class DimsomePanel extends HTMLElement {
 
         <line class="horizon" x1="${padX}" y1="${horizonY}" x2="${padX + innerW}" y2="${horizonY}"/>
         <line class="twilight" x1="${padX}" y1="${twilightY}" x2="${padX + innerW}" y2="${twilightY}"/>
-        <text class="axis-label" x="${padX + innerW - 4}" y="${twilightY + 12}" text-anchor="end">civil twilight −6°</text>
+        <text class="axis-label" x="${padX + 4}" y="${twilightY - 4}" text-anchor="start">civil twilight −6°</text>
         <text class="axis-label" x="${padX + innerW - 4}" y="${horizonY - 4}" text-anchor="end">horizon</text>
 
         <path d="${dayPath}" fill="url(#day-fill)"/>
         <path class="sun-path" d="${path}" fill="none"/>
+        ${civilMarker(windows.civilDawn, "dawn")}
+        ${civilMarker(windows.civilDusk, "dusk")}
 
         ${eventMarker(windows.dimStart, `Dim ${formatTime(windows.dimStart || now)}`, "ev-dim")}
         ${eventMarker(windows.briStart, `Brighten ${formatTime(windows.briStart || now)}`, "ev-bri")}
@@ -1012,6 +1035,7 @@ class DimsomePanel extends HTMLElement {
     const schedule = getPath(this._config, path) || fallback;
     const type = schedule.type || "fixed_time";
     const id = path.replaceAll(".", "-");
+    const limitKey = scheduleLimitKey(path);
     return `
       <div class="schedule-card" aria-labelledby="${id}-title">
         <div class="schedule-title" id="${id}-title">${escapeHtml(title)}</div>
@@ -1036,6 +1060,17 @@ class DimsomePanel extends HTMLElement {
               value: schedule.event || defaultCivilEventForPath(path),
               options: SUN_EVENTS,
             }))}
+            ${this._renderField(
+              limitKey === "not_later_than" ? "Start no later than" : "Start no earlier than",
+              `<input
+                class="native-text"
+                aria-label="${escapeHtml(title)} ${limitKey === "not_later_than" ? "start no later than" : "start no earlier than"}"
+                type="time"
+                value="${escapeHtml((schedule[limitKey] || "").slice(0, 5))}"
+                data-path="${path}.${limitKey}"
+                data-optional
+              >`,
+            )}
           `}
         </div>
       </div>
@@ -1170,12 +1205,12 @@ class DimsomePanel extends HTMLElement {
     const windows = this._scheduleWindows(now, light);
     const levels = brightnessLevels(light);
     const samples = brightnessProfile(levels, windows, windows.start);
-    const invalid = levels.min > levels.max || levels.briMin > levels.briMax;
+    const invalid = levels.min > levels.max;
     const hasColor = levels.kMin !== null;
     const kelvinRange = (from, to) => (hasColor ? `, ${from} K → ${to} K` : "");
     const caption = [
       windows.briStart
-        ? `Brighten ${formatTime(windows.briStart)}: ${levels.briMin}% → ${levels.briMax}%${kelvinRange(levels.kMin, levels.kMax)}`
+        ? `Brighten ${formatTime(windows.briStart)}: ${levels.min}% → ${levels.max}%${kelvinRange(levels.kMin, levels.kMax)}`
         : "",
       windows.dimStart
         ? `Dim ${formatTime(windows.dimStart)}: ${levels.max}% → ${levels.min}%${kelvinRange(levels.kMax, levels.kMin)}`
@@ -1201,6 +1236,19 @@ class DimsomePanel extends HTMLElement {
       return `<line class="profile-grid" x1="${gx}" y1="0" x2="${gx}" y2="${H}"/>`;
     }).join("");
     const nowX = x(now.getTime()).toFixed(1);
+    // Civil dawn/dusk markers show how far a start bound moves the ramp.
+    const civil = [
+      ["dawn", windows.civilDawn],
+      ["dusk", windows.civilDusk],
+    ].filter(([, at]) => at);
+    const civilLines = civil.map(([, at]) => {
+      const cx = x(at.getTime()).toFixed(1);
+      return `<line class="profile-civil" x1="${cx}" y1="0" x2="${cx}" y2="${H}"/>`;
+    }).join("");
+    const civilLabels = civil.map(([name, at]) => {
+      const left = Math.min(94, Math.max(6, (x(at.getTime()) / W) * 100)).toFixed(2);
+      return `<span style="left: ${left}%">Civil ${name} ${formatTime(at)}</span>`;
+    }).join("");
     // With color configured, tint the line by the color temperature the
     // engine targets at each moment; one stop per change (plateaus collapse).
     // The light's own Kelvin range is stretched over 2000-6500 K so even a
@@ -1237,6 +1285,7 @@ class DimsomePanel extends HTMLElement {
     const paint = (property) => (colored ? ` style="${property}: url(#${gradientId})"` : "");
     return `
       <div class="profile${invalid ? " profile-invalid" : ""}${colored ? " profile-kelvin" : ""}">
+        ${civilLabels ? `<div class="profile-civil-labels">${civilLabels}</div>` : ""}
         <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img"
           aria-label="Brightness over today: ${escapeHtml(caption)}">
           ${gradient}
@@ -1244,6 +1293,7 @@ class DimsomePanel extends HTMLElement {
           <path class="profile-area" d="${area}"${paint("fill")}/>
           ${colored ? `<path class="profile-line-casing" d="${line}"/>` : ""}
           <path class="profile-line" d="${line}"${paint("stroke")}/>
+          ${civilLines}
           <line class="profile-now" x1="${nowX}" y1="0" x2="${nowX}" y2="${H}"/>
         </svg>
         <div class="profile-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
@@ -1258,7 +1308,6 @@ class DimsomePanel extends HTMLElement {
     const state = this._lightStates[light.entity_id] || {};
     const hasColor = Boolean(light.min_color && light.max_color);
     const hasOverrides = hasTimingOverride(light);
-    const separateDawn = hasBrightenLevels(light);
     const key = light.entity_id || `new-${index}`;
     const overrideDetails = hasOverrides ? [
       `dim ${formatScheduleSummary(light.dim_schedule || this._config.global.dim_schedule)}`,
@@ -1305,26 +1354,6 @@ class DimsomePanel extends HTMLElement {
                 ${this._pctInput("Minimum brightness", `lights.${index}.min_brightness_pct`, light.min_brightness_pct ?? 10)}
                 ${this._pctInput("Maximum brightness", `lights.${index}.max_brightness_pct`, light.max_brightness_pct ?? 80)}
               </div>
-              <div class="setting-row compact-row">
-                <div class="setting-copy">
-                  <span class="setting-heading">Separate dawn levels</span>
-                  <span class="setting-description">Brighten over a different range, e.g. start the morning brighter.</span>
-                </div>
-                <div class="setting-control">
-                  <ha-switch
-                    aria-label="Separate dawn levels"
-                    ${separateDawn ? "checked" : ""}
-                    data-brighten-toggle="${index}"
-                  ></ha-switch>
-                </div>
-              </div>
-              ${separateDawn ? `
-                <div class="field-grid pair">
-                  ${this._pctInput("Dawn minimum", `lights.${index}.brighten_min_brightness_pct`, light.brighten_min_brightness_pct ?? light.min_brightness_pct ?? 10)}
-                  ${this._pctInput("Dawn maximum", `lights.${index}.brighten_max_brightness_pct`, light.brighten_max_brightness_pct ?? light.max_brightness_pct ?? 80)}
-                </div>
-                <p class="levels-note">The dawn maximum also holds through the day. Dusk still dims from maximum to minimum.</p>
-              ` : ""}
             </div>
             ${this._renderProfile(light, index)}
           </div>
@@ -2198,6 +2227,16 @@ class DimsomePanel extends HTMLElement {
         .sun-curve .event-label { font-size: 11px; font-weight: 600; }
         .sun-curve .event-label.ev-dim { fill: var(--info-color, #039be5); }
         .sun-curve .event-label.ev-bri { fill: var(--success-color, #43a047); }
+        .sun-curve .civil-dot {
+          fill: var(--card-background-color);
+          stroke: var(--secondary-text-color);
+          stroke-width: 1.5;
+        }
+        .sun-curve .civil-label {
+          fill: var(--secondary-text-color);
+          font-size: 10px;
+          font-variant-numeric: tabular-nums;
+        }
         .sun-curve .now-line { stroke: var(--primary-color); stroke-width: 2; }
         .sun-curve .now-dot {
           fill: var(--primary-color);
@@ -2305,17 +2344,6 @@ class DimsomePanel extends HTMLElement {
           padding: 4px 0 12px;
         }
 
-        .setting-row.compact-row {
-          border-top: none;
-          padding: 0;
-        }
-
-        .levels-note {
-          color: var(--secondary-text-color);
-          font-size: 0.8125rem;
-          line-height: 1.4;
-        }
-
         .profile {
           background: var(--secondary-background-color);
           border-radius: 10px;
@@ -2359,6 +2387,29 @@ class DimsomePanel extends HTMLElement {
 
         /* Kelvin-tinted line: a thin dark casing keeps near-white daytime
            colors readable on light themes. */
+        .profile-civil {
+          stroke: var(--secondary-text-color);
+          stroke-dasharray: 1 3;
+          stroke-linecap: round;
+          stroke-width: 1.5;
+          opacity: 0.8;
+          vector-effect: non-scaling-stroke;
+        }
+
+        .profile-civil-labels {
+          color: var(--secondary-text-color);
+          font-size: 0.6875rem;
+          font-variant-numeric: tabular-nums;
+          height: 1.1em;
+          position: relative;
+        }
+
+        .profile-civil-labels span {
+          position: absolute;
+          transform: translateX(-50%);
+          white-space: nowrap;
+        }
+
         .profile-kelvin .profile-line {
           stroke-width: 2.5;
         }
