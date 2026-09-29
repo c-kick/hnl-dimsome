@@ -21,6 +21,14 @@ The panel overview plots today's sun elevation with both ramps. Open dots mark c
 
 ## Installation
 
+### HACS
+
+1. In HACS, open the menu (⋮) and choose **Custom repositories**.
+2. Add `https://github.com/c-kick/hnl-dimsome` with type **Integration**.
+3. Search for **Dimsome**, download it, and restart Home Assistant.
+
+### Manual
+
 Clone (or update) this repository, then copy the integration into your Home Assistant `custom_components` directory:
 
 ```bash
