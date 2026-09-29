@@ -52,6 +52,15 @@ def brightness_ha_to_pct(value: int | None) -> int | None:
     return max(1, min(100, round(value * 100 / 255)))
 
 
+def color_service_data(target: LightTarget) -> dict[str, object]:
+    """Convert a target color into light.turn_on service data."""
+    if target.color is None:
+        return {}
+    if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
+        return {ColorMode.COLOR_TEMP_KELVIN.value: target.color.value}
+    return {}
+
+
 def split_turn_on_service_data(
     entity_id: str, target: LightTarget
 ) -> list[dict[str, object]]:
@@ -60,14 +69,10 @@ def split_turn_on_service_data(
         "entity_id": entity_id,
         "brightness": brightness_pct_to_ha(target.brightness_pct),
     }
-    if target.color is None:
+    color_data = color_service_data(target)
+    if not color_data:
         return [brightness_data]
-    if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
-        return [
-            {"entity_id": entity_id, ColorMode.COLOR_TEMP_KELVIN.value: target.color.value},
-            brightness_data,
-        ]
-    return [brightness_data]
+    return [{"entity_id": entity_id, **color_data}, brightness_data]
 
 
 def schedule_start(

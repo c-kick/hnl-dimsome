@@ -35,6 +35,7 @@ from .const import DOMAIN, SERVICE_RESUME
 from .engine import (
     active_window,
     brightness_pct_to_ha,
+    color_service_data,
     next_window_start,
     should_clear_manual_override_for_window,
     should_ignore_state_change,
@@ -45,7 +46,6 @@ from .engine import (
     target_for_now,
 )
 from .models import (
-    ColorMode,
     ColorTarget,
     LightRuntime,
     LightTarget,
@@ -619,15 +619,6 @@ def _cancel_grace_resume(runtime: LightRuntime) -> None:
     if runtime.grace_unsub is not None:
         runtime.grace_unsub()
         runtime.grace_unsub = None
-
-
-def color_service_data(target: LightTarget) -> dict[str, Any]:
-    """Convert a target color into light.turn_on service data."""
-    if target.color is None:
-        return {}
-    if target.color.mode is ColorMode.COLOR_TEMP_KELVIN:
-        return {ColorMode.COLOR_TEMP_KELVIN.value: target.color.value}
-    return {}
 
 
 def _datetime_status(value: datetime | None) -> str | None:
