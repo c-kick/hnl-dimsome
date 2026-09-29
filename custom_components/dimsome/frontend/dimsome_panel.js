@@ -349,8 +349,8 @@ class DimsomePanel extends HTMLElement {
     const hadHass = Boolean(this._hass);
     this._hass = hass;
     if (!this._loaded) this._loadConfig();
-    if (!hadHass && this.shadowRoot?.hasChildNodes()) this._hydrateNativeComponents();
-    const menuBtn = this.shadowRoot?.querySelector("ha-menu-button");
+    if (!hadHass && this.shadowRoot.hasChildNodes()) this._hydrateNativeComponents();
+    const menuBtn = this.shadowRoot.querySelector("ha-menu-button");
     if (menuBtn) menuBtn.hass = hass;
   }
 
@@ -362,7 +362,7 @@ class DimsomePanel extends HTMLElement {
     const narrow = Boolean(value);
     if (narrow === this._narrow) return;
     this._narrow = narrow;
-    const menuBtn = this.shadowRoot?.querySelector("ha-menu-button");
+    const menuBtn = this.shadowRoot.querySelector("ha-menu-button");
     if (menuBtn) menuBtn.narrow = narrow;
   }
 
@@ -472,7 +472,7 @@ class DimsomePanel extends HTMLElement {
     this._refreshHero();
     // Only touch the live bits of each card; replacing whole cards would
     // collapse open panels and steal focus from inputs.
-    this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
+    this.shadowRoot.querySelectorAll(".lights-list > .light-card").forEach((card) => {
       const light = this._config.lights[Number(card.dataset.index)];
       if (!light) return;
       const status = card.querySelector(".status-line");
@@ -484,7 +484,7 @@ class DimsomePanel extends HTMLElement {
   }
 
   _refreshHero() {
-    const current = this.shadowRoot?.querySelector(".hero-card");
+    const current = this.shadowRoot.querySelector(".hero-card");
     if (!current) return;
     const wrapper = document.createElement("div");
     wrapper.innerHTML = this._renderHero();
@@ -496,7 +496,7 @@ class DimsomePanel extends HTMLElement {
   }
 
   _refreshProfiles(index = null) {
-    this.shadowRoot?.querySelectorAll(".lights-list > .light-card").forEach((card) => {
+    this.shadowRoot.querySelectorAll(".lights-list > .light-card").forEach((card) => {
       const cardIndex = Number(card.dataset.index);
       if (index !== null && cardIndex !== index) return;
       const light = this._config.lights[cardIndex];
@@ -532,7 +532,7 @@ class DimsomePanel extends HTMLElement {
   }
 
   _updateDirtyUi() {
-    const bar = this.shadowRoot?.querySelector(".save-bar");
+    const bar = this.shadowRoot.querySelector(".save-bar");
     if (bar) bar.hidden = !this._isDirty();
   }
 
@@ -697,8 +697,6 @@ class DimsomePanel extends HTMLElement {
   }
 
   _hydrateNativeComponents(root = this.shadowRoot) {
-    if (!root) return;
-
     // Menu button — native sidebar toggle for narrow screens
     const menuBtn = root.querySelector("ha-menu-button");
     if (menuBtn) {
@@ -1638,7 +1636,6 @@ class DimsomePanel extends HTMLElement {
   }
 
   _render() {
-    if (!this.shadowRoot) return;
     this.shadowRoot.querySelectorAll("ha-expansion-panel[data-key]").forEach((panel) => {
       this._expanded.set(panel.dataset.key, Boolean(panel.expanded));
     });
