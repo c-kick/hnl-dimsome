@@ -177,8 +177,6 @@ def parse_color(value: Any) -> ColorTarget | None:
     if not isinstance(value, dict):
         raise ValueError("Color must be an object")
     mode = ColorMode(value.get("mode"))
-    if mode is not ColorMode.COLOR_TEMP_KELVIN:
-        raise ValueError(f"Unsupported color mode: {mode}")
     color_value = int(value["value"])
     if color_value < 1000 or color_value > 12000:
         raise ValueError("color_temp_kelvin must be between 1000 and 12000")
@@ -227,6 +225,13 @@ def _optional_limit(value: dict[str, Any], key: str) -> str | None:
 _LIGHT_ENTITY_ID = re.compile(r"^light\.(?!_)(?!.*__)[\da-z_]+(?<!_)$")
 
 
+def _setting(
+    light: dict[str, Any], global_config: dict[str, Any], key: str, default: Any = None
+) -> Any:
+    """Return the light's own value for key, else the global one, else default."""
+    return light.get(key, global_config.get(key, default))
+
+
 def _require_brightness(value: Any, name: str) -> int:
     brightness = int(value)
     if brightness < 1 or brightness > 100:
@@ -249,11 +254,9 @@ def resolve_native_user_ids(config: dict[str, Any]) -> frozenset[str]:
 
 def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
     """Resolve global defaults and per-light overrides into immutable configs."""
-    # Validates the global allowlist too, so config-save rejects bad values.
+    # Also validates `global` itself, so config-save rejects bad values.
     resolve_native_user_ids(config)
     global_config = config.get(CONF_GLOBAL, {})
-    if not isinstance(global_config, dict):
-        raise ValueError("global must be an object")
     light_configs = config.get(CONF_LIGHTS, [])
     if not isinstance(light_configs, list) or not light_configs:
         return []
@@ -282,8 +285,7 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
             raise ValueError("min_brightness_pct must be <= max_brightness_pct")
 
         ramp_duration = parse_duration(
-            light.get(CONF_RAMP_DURATION, global_config.get(CONF_RAMP_DURATION)),
-            timedelta(minutes=60),
+            _setting(light, global_config, CONF_RAMP_DURATION), timedelta(minutes=60)
         )
         assert ramp_duration is not None
         if ramp_duration <= timedelta(0):
@@ -297,19 +299,16 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
             raise ValueError("settle_delay must not be negative")
 
         grace_period = parse_duration(
-            light.get(
-                CONF_OVERRIDE_GRACE_PERIOD,
-                global_config.get(CONF_OVERRIDE_GRACE_PERIOD),
-            )
+            _setting(light, global_config, CONF_OVERRIDE_GRACE_PERIOD)
         )
         if grace_period is not None and grace_period <= timedelta(0):
             raise ValueError("override_grace_period must be positive")
         resume_mode = OverrideResumeMode(
-            light.get(
+            _setting(
+                light,
+                global_config,
                 CONF_OVERRIDE_RESUME_MODE,
-                global_config.get(
-                    CONF_OVERRIDE_RESUME_MODE, OverrideResumeMode.MANUAL_ONLY.value
-                ),
+                OverrideResumeMode.MANUAL_ONLY.value,
             )
         )
         if resume_mode is OverrideResumeMode.AFTER_GRACE_PERIOD and grace_period is None:
@@ -324,37 +323,29 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                 min_color=parse_color(light.get(CONF_MIN_COLOR)),
                 max_color=parse_color(light.get(CONF_MAX_COLOR)),
                 dim_schedule=parse_schedule(
-                    light.get(
+                    _setting(
+                        light,
+                        global_config,
                         CONF_DIM_SCHEDULE,
-                        global_config.get(CONF_DIM_SCHEDULE, {
-                            "type": ScheduleType.CIVIL_SUN,
-                            "event": SunEvent.CIVIL_DUSK,
-                        }),
+                        {"type": ScheduleType.CIVIL_SUN, "event": SunEvent.CIVIL_DUSK},
                     )
                 ),
                 brighten_schedule=parse_schedule(
-                    light.get(
+                    _setting(
+                        light,
+                        global_config,
                         CONF_BRIGHTEN_SCHEDULE,
-                        global_config.get(CONF_BRIGHTEN_SCHEDULE, {
-                            "type": ScheduleType.CIVIL_SUN,
-                            "event": SunEvent.CIVIL_DAWN,
-                        }),
+                        {"type": ScheduleType.CIVIL_SUN, "event": SunEvent.CIVIL_DAWN},
                     )
                 ),
                 ramp_duration=ramp_duration,
                 override_resume_mode=resume_mode,
                 override_grace_period=grace_period,
                 split_turn_on_calls=bool(
-                    light.get(
-                        CONF_SPLIT_TURN_ON_CALLS,
-                        global_config.get(CONF_SPLIT_TURN_ON_CALLS, False),
-                    )
+                    _setting(light, global_config, CONF_SPLIT_TURN_ON_CALLS, False)
                 ),
                 apply_on_recovered_on=bool(
-                    light.get(
-                        CONF_APPLY_ON_RECOVERED_ON,
-                        global_config.get(CONF_APPLY_ON_RECOVERED_ON, True),
-                    )
+                    _setting(light, global_config, CONF_APPLY_ON_RECOVERED_ON, True)
                 ),
                 settle_delay=settle_delay,
             )
