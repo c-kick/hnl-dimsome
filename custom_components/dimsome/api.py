@@ -100,9 +100,7 @@ async def ws_save_config(hass: HomeAssistant, connection, msg) -> None:
         connection.send_error(msg["id"], "not_configured", "Dimsome is not set up")
         return
 
-    config = config_with_current_light_enabled(
-        deepcopy(msg["config"]), _current_config(entry)
-    )
+    config = config_with_current_light_enabled(msg["config"], _current_config(entry))
     config.setdefault("global", {})
     config.setdefault("lights", [])
     error = _validate_config(config)
