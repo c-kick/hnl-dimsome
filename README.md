@@ -15,6 +15,10 @@ By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn
 
 Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`).
 
+<!-- SCREENSHOT hero.png: paste here, then set width="800" and alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 06:40, ahead of civil dawn at 07:08, and the dim ramp at 21:00, after civil dusk at 19:51" -->
+
+The panel overview plots today's sun elevation with both ramps. Open dots mark civil dawn and dusk, so you can see when a start bound moves a ramp away from the sun event.
+
 ## Installation
 
 Clone (or update) this repository, then copy the integration into your Home Assistant `custom_components` directory:
@@ -66,6 +70,8 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 - **Apply On Recovery** — re-apply the current target when a light comes back online while already on.
 - **Native Users** — comma-separated Home Assistant user IDs whose light changes are treated as automations rather than manual overrides (useful for Node-RED or other token-based integrations).
 
+<!-- SCREENSHOT global-schedule.png: paste here, then set width="700" and alt="Schedule and defaults section: dim at civil dusk but no earlier than 21:00, brighten at civil dawn but no later than 06:40" -->
+
 ### Per-light settings
 
 - **Light Entity** — the light to control.
@@ -76,6 +82,14 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 - **Schedule / Ramp Duration / Override Resume / Grace Period overrides** — per-light overrides of the global schedule and resume behavior.
 
 Per-light **enable/pause** is handled by the `Dimsome enabled` switch entity.
+
+Each light card shows a 24-hour brightness profile with today's civil dawn and dusk marked. With color temperature configured, the line is tinted by the target color over the day:
+
+<!-- SCREENSHOT light-card.png: paste here, then set width="700" and alt="Light card with a brightness profile from 40% at night to 80% by day, tinted from warm to cooler white" -->
+
+A light can override the global timing. Here it brightens by 06:15, ahead of civil dawn at 07:08, while still dimming no earlier than 21:00:
+
+<!-- SCREENSHOT light-custom-schedule.png: paste here, then set width="700" and alt="Light card with a custom schedule: brighten at civil dawn but no later than 06:15, dim at civil dusk but no earlier than 21:00" -->
 
 ## Entities
 
