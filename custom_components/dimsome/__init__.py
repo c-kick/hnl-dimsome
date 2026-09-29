@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from .const import DOMAIN, PLATFORMS
+import voluptuous as vol
+
+from .const import CONF_GLOBAL, CONF_LIGHTS, DOMAIN, PLATFORMS
 from .entity import enabled_switch_unique_id, light_unique_id
 
 if TYPE_CHECKING:
@@ -19,6 +21,12 @@ else:
     type DimsomeConfigEntry = Any
 
 _LOGGER = logging.getLogger(__name__)
+
+# Only the outer shape: models.py validates the contents when the entry is set up.
+CONFIG_SCHEMA = vol.Schema(
+    {DOMAIN: vol.Schema({vol.Optional(CONF_GLOBAL): dict, vol.Optional(CONF_LIGHTS): list})},
+    extra=vol.ALLOW_EXTRA,
+)
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
