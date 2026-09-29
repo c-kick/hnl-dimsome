@@ -1,3 +1,6 @@
+// Dimsome sidebar panel: edits the config over the dimsome/* WebSocket API
+// and charts each light's ramps for today.
+
 const DEFAULT_CONFIG = {
   global: {
     dim_schedule: { type: "civil_sun", event: "civil_dusk" },
@@ -29,7 +32,6 @@ const RESUME_MODES = [
 
 const COLOR_MODE = "color_temp_kelvin";
 
-// MDI icon SVG paths
 const MDI_REFRESH = "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z";
 const MDI_CONTENT_SAVE = "M15,9H5V5H15M12,19A3,3 0 0,1 9,16A3,3 0 0,1 12,13A3,3 0 0,1 15,16A3,3 0 0,1 12,19M17,3H5C3.89,3 3,3.9 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V7L17,3Z";
 const MDI_PLAY_CIRCLE = "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5V7.5L16,12L10,16.5Z";
@@ -193,8 +195,7 @@ const formatRelative = (target, now) => {
   return m ? `in ${h}h ${m}m` : `in ${h}h`;
 };
 
-// ── Solar elevation (NOAA approximate) ─────────────────────────────────
-// Returns degrees above horizon for given lat/lon at JS Date.
+// Sun elevation in degrees above the horizon (NOAA approximation).
 const solarElevation = (lat, lon, date) => {
   const rad = Math.PI / 180;
   const startOfYear = new Date(date.getFullYear(), 0, 0);
@@ -697,14 +698,12 @@ class DimsomePanel extends HTMLElement {
   }
 
   _hydrateNativeComponents(root = this.shadowRoot) {
-    // Menu button — native sidebar toggle for narrow screens
     const menuBtn = root.querySelector("ha-menu-button");
     if (menuBtn) {
       menuBtn.hass = this._hass;
       menuBtn.narrow = this._narrow;
     }
 
-    // Icon button SVG paths
     root.querySelectorAll("ha-icon-button[data-action]").forEach((btn) => {
       const action = btn.dataset.action;
       if (action === "reload") btn.path = MDI_REFRESH;
@@ -714,35 +713,28 @@ class DimsomePanel extends HTMLElement {
       if (action === "open-add-dialog") btn.path = MDI_PLUS;
     });
 
-    // Entity pickers
     root.querySelectorAll("ha-entity-picker").forEach((picker) => {
       picker.hass = this._hass;
       picker.includeDomains = ["light"];
       picker.value = picker.dataset.value || "";
     });
 
-    // State icons
     root.querySelectorAll("ha-state-icon").forEach((icon) => {
       icon.hass = this._hass;
       icon.stateObj = this._hass?.states?.[icon.dataset.entityId];
     });
 
-    // Time selectors
     root.querySelectorAll("ha-selector[data-selector='time']").forEach((selector) => {
       selector.hass = this._hass;
       selector.selector = { time: {} };
       selector.value = selector.dataset.value || "";
     });
 
-    // Native <select> and <input> elements carry their values as plain HTML
-    // attributes, so they need no hydration.
-
-    // Switches
     root.querySelectorAll("ha-switch").forEach((control) => {
       control.checked = control.hasAttribute("checked");
     });
 
-    // Dialog lifecycle — handles ESC / scrim / programmatic close.
+    // "closed" fires for ESC, scrim clicks and programmatic closes alike.
     const dialog = root.querySelector("ha-dialog");
     if (dialog && !dialog._dimsomeBound) {
       dialog._dimsomeBound = true;
@@ -760,7 +752,6 @@ class DimsomePanel extends HTMLElement {
       });
     });
 
-    // Bind all data controls
     root
       .querySelectorAll("[data-path], [data-draft-path], [data-color-toggle], [data-override-toggle]")
       .forEach((control) => this._bindControl(control));
@@ -827,7 +818,7 @@ class DimsomePanel extends HTMLElement {
     </span>`;
   }
 
-  // Compute today's dim/brighten windows from global schedule + ramp duration.
+  // Today's dim/brighten windows for a light, or for the global schedule.
   _scheduleWindows(now, light = null) {
     const lat = this._hass?.config?.latitude ?? 52.0;
     const lon = this._hass?.config?.longitude ?? 5.0;
@@ -1730,7 +1721,7 @@ class DimsomePanel extends HTMLElement {
           color: var(--primary-text-color);
         }
 
-        /* ── Toolbar ─────────────────────────────────────────────────── */
+        /* Toolbar */
         .panel-toolbar {
           --icon-primary-color: var(--app-header-text-color, var(--text-primary-color));
           align-items: center;
@@ -1766,7 +1757,7 @@ class DimsomePanel extends HTMLElement {
           display: flex;
         }
 
-        /* ── Page body ───────────────────────────────────────────────── */
+        /* Page body */
         .page-body {
           box-sizing: border-box;
           max-width: 1120px;
@@ -1902,7 +1893,7 @@ class DimsomePanel extends HTMLElement {
           padding: 16px;
         }
 
-        /* ── Settings rows ───────────────────────────────────────────── */
+        /* Settings rows */
         .settings-list {
           margin-top: 8px;
         }
@@ -1948,7 +1939,7 @@ class DimsomePanel extends HTMLElement {
           width: max-content;
         }
 
-        /* ── Layout ──────────────────────────────────────────────────── */
+        /* Layout */
         .announcements {
           display: grid;
           gap: 8px;
@@ -1987,7 +1978,7 @@ class DimsomePanel extends HTMLElement {
           font-size: 0.875rem;
         }
 
-        /* ── Field grids ─────────────────────────────────────────────── */
+        /* Field grids */
         /* align-items: start prevents shorter inputs from stretching to match
            taller siblings (e.g. ha-selector[type=time] with its 3-box layout). */
         .two-col,
@@ -2019,7 +2010,7 @@ class DimsomePanel extends HTMLElement {
           margin-top: 16px;
         }
 
-        /* ── Schedule sub-card ───────────────────────────────────────── */
+        /* Schedule sub-card */
         .schedule-card {
           background: var(--secondary-background-color);
           border: 1px solid var(--ha-card-border-color, var(--divider-color));
@@ -2034,7 +2025,7 @@ class DimsomePanel extends HTMLElement {
           margin-bottom: 12px;
         }
 
-        /* ── Per-light override box ──────────────────────────────────── */
+        /* Per-light override box */
         /* Negative margin cancels card-content's 16px padding so the field-grid
            inside starts at the same x-position as the main field-grid above. */
         .override-box {
@@ -2044,7 +2035,7 @@ class DimsomePanel extends HTMLElement {
           padding: 16px;
         }
 
-        /* ── Light card header ───────────────────────────────────────── */
+        /* Light card header */
         .light-header-row {
           align-items: flex-start;
           display: flex;
@@ -2097,7 +2088,7 @@ class DimsomePanel extends HTMLElement {
           color: var(--error-color);
         }
 
-        /* ── Center states ───────────────────────────────────────────── */
+        /* Center states */
         .center-state-wrap {
           align-items: center;
           display: flex;
@@ -2129,7 +2120,7 @@ class DimsomePanel extends HTMLElement {
           --mdc-icon-size: 40px;
         }
 
-        /* ── Add Light dialog ────────────────────────────────────────── */
+        /* Add Light dialog */
         ha-dialog {
           --mdc-dialog-min-width: min(420px, calc(100vw - 32px));
           --mdc-dialog-max-width: 560px;
@@ -2165,7 +2156,7 @@ class DimsomePanel extends HTMLElement {
           outline-offset: 3px;
         }
 
-        /* ── Hero card ───────────────────────────────────────────────── */
+        /* Hero card */
         .hero-card {
           --ha-card-border-radius: 18px;
           overflow: hidden;
@@ -2276,7 +2267,7 @@ class DimsomePanel extends HTMLElement {
           display: inline-block;
         }
 
-        /* ── Status chip ─────────────────────────────────────────────── */
+        /* Status chip */
         .status-chip {
           align-items: center;
           background: var(--secondary-background-color);
@@ -2328,7 +2319,7 @@ class DimsomePanel extends HTMLElement {
           display: block;
         }
 
-        /* ── Brightness levels + daily profile ───────────────────────── */
+        /* Brightness levels + daily profile */
         .levels {
           align-items: start;
           display: grid;
@@ -2391,8 +2382,6 @@ class DimsomePanel extends HTMLElement {
           vector-effect: non-scaling-stroke;
         }
 
-        /* Kelvin-tinted line: a thin dark casing keeps near-white daytime
-           colors readable on light themes. */
         .profile-civil {
           stroke: var(--secondary-text-color);
           stroke-dasharray: 1 3;
@@ -2424,6 +2413,8 @@ class DimsomePanel extends HTMLElement {
           fill-opacity: 0.16;
         }
 
+        /* Kelvin-tinted line: a thin dark casing keeps near-white daytime
+           colors readable on light themes. */
         .profile-line-casing {
           fill: none;
           stroke: rgba(0, 0, 0, 0.45);
@@ -2466,7 +2457,7 @@ class DimsomePanel extends HTMLElement {
           margin-inline-end: 4px;
         }
 
-        /* ── Unsaved changes bar ─────────────────────────────────────── */
+        /* Unsaved changes bar */
         .save-bar {
           align-items: center;
           background: var(--card-background-color, var(--primary-background-color));
@@ -2507,7 +2498,7 @@ class DimsomePanel extends HTMLElement {
           gap: 8px;
         }
 
-        /* ── Mobile ──────────────────────────────────────────────────── */
+        /* Mobile */
         @media (max-width: 720px) {
           .hero-content { padding: 16px; }
           .hero-headline { font-size: 1.4rem; }
