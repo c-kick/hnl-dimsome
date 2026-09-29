@@ -1,6 +1,6 @@
 # Dimsome
 
-<img width="1048" height="242" alt="image" src="https://github.com/user-attachments/assets/50a69ee0-8d64-4738-89ff-b9c4a8d2a808" />
+<img width="2172" height="724" alt="DimSome - Deterministic adaptive light dimming for Home Assistant" src="https://github.com/user-attachments/assets/b36cd847-272b-4998-a4fa-354c1fffacba" />
 
 Dimsome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming.
 
