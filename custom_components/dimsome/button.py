@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import DimsomeConfigEntry
 from .const import DOMAIN
 from .coordinator import DimsomeController
 from .entity import light_device_info, light_unique_id
-
-type DimsomeConfigEntry = ConfigEntry[DimsomeController]
 
 
 async def async_setup_entry(

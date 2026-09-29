@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from . import DimsomeConfigEntry
 from .config_helpers import config_with_light_enabled
 from .coordinator import DimsomeController
 from .entity import enabled_switch_unique_id, light_device_info
-
-type DimsomeConfigEntry = ConfigEntry[DimsomeController]
 
 
 async def async_setup_entry(
