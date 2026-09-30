@@ -4,8 +4,6 @@
 
 Dimsome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming.
 
-> **Beta.** Dimsome is still in active development. Behavior and configuration may change between releases.
-
 It drives configured lights with two daily ramps:
 
 - a **dim** ramp from the day target down to the night target
