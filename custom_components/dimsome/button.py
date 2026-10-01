@@ -40,7 +40,7 @@ class DimsomeResumeButton(ButtonEntity):
         self._attr_unique_id = f"{entry_id}_resume"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry_id)},
-            "name": "Dimsome",
+            "name": "DimSome",
         }
 
     async def async_press(self) -> None:

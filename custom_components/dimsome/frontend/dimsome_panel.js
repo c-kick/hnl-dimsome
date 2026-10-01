@@ -419,7 +419,7 @@ class DimsomePanel extends HTMLElement {
 
   async _saveConfig() {
     if (!this._canSave()) {
-      this._saveError = "Only administrators can save Dimsome settings. This Home Assistant account isn't an admin.";
+      this._saveError = "Only administrators can save DimSome settings. This Home Assistant account isn't an admin.";
       this._render();
       return;
     }
@@ -430,7 +430,7 @@ class DimsomePanel extends HTMLElement {
     this._render();
     try {
       await this._hass.callWS({ type: "dimsome/save_config", config: this._config });
-      this._message = "Saved. Dimsome reloaded.";
+      this._message = "Saved. DimSome reloaded.";
       this._loaded = false;
       await this._loadConfig();
     } catch (error) {
@@ -452,7 +452,7 @@ class DimsomePanel extends HTMLElement {
     try {
       await this._hass.callService("dimsome", "resume", data);
       this._error = "";
-      this._message = entityId ? `Resumed ${entityId}.` : "Resumed all Dimsome lights.";
+      this._message = entityId ? `Resumed ${entityId}.` : "Resumed all DimSome lights.";
       await this._refreshLiveBits();
     } catch (error) {
       this._error = error.message || String(error);
@@ -692,7 +692,7 @@ class DimsomePanel extends HTMLElement {
   _removeLight(index) {
     const light = this._config.lights[index];
     const name = light?.entity_id || "this light";
-    if (!window.confirm(`Remove ${name} from Dimsome?`)) return;
+    if (!window.confirm(`Remove ${name} from DimSome?`)) return;
     this._config.lights.splice(index, 1);
     this._render();
   }
@@ -955,7 +955,7 @@ class DimsomePanel extends HTMLElement {
     };
 
     return `
-      <svg class="sun-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Sun elevation and Dimsome schedule for today">
+      <svg class="sun-curve" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Sun elevation and DimSome schedule for today">
         <defs>
           <linearGradient id="day-fill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="var(--warning-color, #ffb300)" stop-opacity="0.45"/>
@@ -1021,7 +1021,7 @@ class DimsomePanel extends HTMLElement {
         <div class="hero-content">
           <div class="hero-headline-row">
             <div class="hero-text">
-              <div class="hero-eyebrow">Dimsome</div>
+              <div class="hero-eyebrow">DimSome</div>
               <h1 class="hero-headline">${escapeHtml(headline)}</h1>
               <div class="hero-sub">${escapeHtml(subParts.join(" · "))}</div>
             </div>
@@ -1140,7 +1140,7 @@ class DimsomePanel extends HTMLElement {
                 >
               </div>
             `)}
-            ${this._renderSetting("Override Resume", "Choose how manual changes return to Dimsome control.", selectHtml({
+            ${this._renderSetting("Override Resume", "Choose how manual changes return to DimSome control.", selectHtml({
               path: "global.override_resume_mode",
               value: global.override_resume_mode || "manual_only",
               options: RESUME_MODES,
@@ -1546,7 +1546,7 @@ class DimsomePanel extends HTMLElement {
     return `
       <div class="panel-toolbar">
         <ha-menu-button></ha-menu-button>
-        <div class="panel-title">Dimsome</div>
+        <div class="panel-title">DimSome</div>
         ${actions ? `
           <div class="panel-actions">
             <ha-icon-button
@@ -1638,7 +1638,7 @@ class DimsomePanel extends HTMLElement {
         <div class="center-state-wrap">
           <div class="center-state">
             <ha-circular-progress active></ha-circular-progress>
-            <p>Loading Dimsome…</p>
+            <p>Loading DimSome…</p>
           </div>
         </div>
       `;
@@ -1654,7 +1654,7 @@ class DimsomePanel extends HTMLElement {
           <div class="center-state">
             <ha-icon icon="mdi:brightness-6" class="empty-icon"></ha-icon>
             <h2>Not Configured</h2>
-            <p>Add Dimsome from Settings &gt; Devices &amp; Services &gt; Add Integration.</p>
+            <p>Add DimSome from Settings &gt; Devices &amp; Services &gt; Add Integration.</p>
             <a href="/config/integrations">Open Integrations</a>
           </div>
         </div>

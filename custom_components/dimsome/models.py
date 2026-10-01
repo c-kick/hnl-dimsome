@@ -272,7 +272,7 @@ def resolve_light_configs(config: dict[str, Any]) -> list[ResolvedLightConfig]:
                 f"{entity_id!r} is not a light entity id (expected light.<name>)"
             )
         if entity_id in seen:
-            raise ValueError(f"Duplicate Dimsome light: {entity_id}")
+            raise ValueError(f"Duplicate DimSome light: {entity_id}")
         seen.add(entity_id)
 
         min_brightness = _require_brightness(

@@ -38,7 +38,7 @@ class DimsomeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         if user_input is not None:
-            return self.async_create_entry(title="Dimsome", data=deepcopy(DEFAULT_CONFIG))
+            return self.async_create_entry(title="DimSome", data=deepcopy(DEFAULT_CONFIG))
 
         return self.async_show_form(
             step_id="user",
@@ -51,4 +51,4 @@ class DimsomeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Import Dimsome YAML configuration."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-        return self.async_create_entry(title="Dimsome", data=user_input)
+        return self.async_create_entry(title="DimSome", data=user_input)

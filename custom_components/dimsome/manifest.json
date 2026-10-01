@@ -1,6 +1,6 @@
 {
   "domain": "dimsome",
-  "name": "Dimsome",
+  "name": "DimSome",
   "codeowners": ["@c-kick"],
   "config_flow": true,
   "dependencies": [

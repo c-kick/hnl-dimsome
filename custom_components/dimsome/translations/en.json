@@ -2,12 +2,12 @@
   "config": {
     "step": {
       "user": {
-        "title": "Set up Dimsome",
-        "description": "Create the Dimsome integration entry. Configure lights and schedules from the Dimsome sidebar panel."
+        "title": "Set up DimSome",
+        "description": "Create the DimSome integration entry. Configure lights and schedules from the DimSome sidebar panel."
       }
     },
     "abort": {
-      "already_configured": "Dimsome is already configured. Use the Dimsome sidebar panel to edit it."
+      "already_configured": "DimSome is already configured. Use the DimSome sidebar panel to edit it."
     }
   },
   "entity": {
@@ -18,18 +18,18 @@
     },
     "switch": {
       "enabled": {
-        "name": "Dimsome enabled"
+        "name": "DimSome enabled"
       }
     }
   },
   "services": {
     "resume": {
       "name": "Resume",
-      "description": "Resume Dimsome control for all configured lights or the selected light entities.",
+      "description": "Resume DimSome control for all configured lights or the selected light entities.",
       "fields": {
         "entity_id": {
           "name": "Light entities",
-          "description": "Only resume Dimsome control for these light entities. Leave empty to resume all configured lights."
+          "description": "Only resume DimSome control for these light entities. Leave empty to resume all configured lights."
         }
       }
     }

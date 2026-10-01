@@ -51,7 +51,7 @@ class DimsomeLightEnabledSwitch(SwitchEntity):
         self._controller = controller
         self._entry = entry
         self._entity_id = entity_id
-        self._attr_name = f"{entity_id} Dimsome enabled"
+        self._attr_name = f"{entity_id} DimSome enabled"
         self._attr_unique_id = unique_id
         self._attr_device_info = light_device_info(entry.entry_id, entity_id)
 

@@ -308,7 +308,7 @@ class DimsomeController:
                 await self._async_apply_target(runtime, target)
             except Exception:
                 _LOGGER.exception(
-                    "Failed to apply Dimsome target for %s",
+                    "Failed to apply DimSome target for %s",
                     runtime.config.entity_id,
                 )
                 self._record_decision(runtime, "apply_failed", now)
@@ -511,14 +511,14 @@ class DimsomeController:
             return
         if runtime.in_flight:
             _LOGGER.debug(
-                "Queueing pending Dimsome target for %s: %s",
+                "Queueing pending DimSome target for %s: %s",
                 runtime.config.entity_id,
                 target,
             )
             runtime.pending_target = target
             return
         _LOGGER.debug(
-            "Applying Dimsome target for %s: %s", runtime.config.entity_id, target
+            "Applying DimSome target for %s: %s", runtime.config.entity_id, target
         )
         runtime.in_flight = True
         runtime.expected_target = target
@@ -669,7 +669,7 @@ async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:
         if entry.state is ConfigEntryState.LOADED:
             controllers.append(entry.runtime_data)
     if not controllers:
-        raise ServiceValidationError("No loaded Dimsome config entries")
+        raise ServiceValidationError("No loaded DimSome config entries")
     if selected is not None:
         configured = {
             entity_id for controller in controllers for entity_id in controller.lights
@@ -677,7 +677,7 @@ async def async_resume_service(hass: HomeAssistant, call: ServiceCall) -> None:
         missing = selected - configured
         if missing:
             raise ServiceValidationError(
-                f"Lights are not configured in Dimsome: {', '.join(sorted(missing))}"
+                f"Lights are not configured in DimSome: {', '.join(sorted(missing))}"
             )
     for controller in controllers:
         await controller.async_resume(selected)

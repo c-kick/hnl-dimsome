@@ -39,7 +39,7 @@ class DimsomeLightStatusSensor(SensorEntity):
         """Initialize the sensor."""
         self._controller = controller
         self._entity_id = entity_id
-        self._attr_name = f"{entity_id} Dimsome status"
+        self._attr_name = f"{entity_id} DimSome status"
         self._attr_unique_id = light_unique_id(entry_id, entity_id, "status")
         self._attr_device_info = light_device_info(entry_id, entity_id)
 

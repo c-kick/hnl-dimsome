@@ -97,7 +97,7 @@ async def ws_save_config(hass: HomeAssistant, connection, msg) -> None:
     """Validate and save Dimsome configuration."""
     entry = _get_entry(hass)
     if entry is None:
-        connection.send_error(msg["id"], "not_configured", "Dimsome is not set up")
+        connection.send_error(msg["id"], "not_configured", "DimSome is not set up")
         return
 
     config = config_with_current_light_enabled(msg["config"], _current_config(entry))

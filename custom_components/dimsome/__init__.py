@@ -61,7 +61,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
         light_configs = resolve_light_configs(raw_config)
         native_user_ids = resolve_native_user_ids(raw_config)
     except (KeyError, TypeError, ValueError) as err:
-        _LOGGER.error("Invalid Dimsome configuration: %s", err)
+        _LOGGER.error("Invalid DimSome configuration: %s", err)
         return False
 
     existing_lights = {
@@ -75,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DimsomeConfigEntry) -> b
     }
     if duplicate_lights:
         _LOGGER.error(
-            "Lights can only be controlled by one Dimsome entry: %s",
+            "Lights can only be controlled by one DimSome entry: %s",
             ", ".join(sorted(duplicate_lights)),
         )
         return False

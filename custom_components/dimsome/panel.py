@@ -28,7 +28,7 @@ async def async_setup_panel(hass: HomeAssistant) -> None:
     async_register_built_in_panel(
         hass=hass,
         component_name="custom",
-        sidebar_title="Dimsome",
+        sidebar_title="DimSome",
         sidebar_icon="mdi:brightness-6",
         frontend_url_path=DOMAIN,
         require_admin=False,
