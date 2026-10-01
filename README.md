@@ -1,8 +1,8 @@
-# Dimsome
+# DimSome
 
 <img width="2172" height="724" alt="DimSome - Deterministic adaptive light dimming for Home Assistant" src="https://github.com/user-attachments/assets/b36cd847-272b-4998-a4fa-354c1fffacba" />
 
-Dimsome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming. In short: use it to dim your lights down in the evenening, and the reverse (brighten them) in the morning.
+DimSome is a custom [Home Assistant](https://www.home-assistant.io/) integration for deterministic adaptive light dimming. In short: use it to dim your lights down in the evenening, and the reverse (brighten them) in the morning.
 
 It drives configured lights with two daily ramps:
 
@@ -11,9 +11,9 @@ It drives configured lights with two daily ramps:
 
 By default the dim ramp starts at civil dusk and the brighten ramp at civil dawn, taken directly from Home Assistant's astral data for the current date. Either ramp can instead use a fixed clock time, which takes precedence over the civil-sun schedule. A civil-sun schedule can also be bounded by a clock time: brighten at civil dawn but no later than 07:00, or dim at civil dusk but no earlier than 21:00.
 
-Between ramps, Dimsome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, Dimsome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`). Saving settings in the panel keeps these overrides; restarting Home Assistant clears them.
+Between ramps, DimSome holds the plateau: when a controlled light turns on after the dim ramp it is set to the night target, and after the brighten ramp to the day target. If a light is changed by hand during an active ramp, DimSome stands down for that light until the ramp ends (or sooner, via the resume button or `dimsome.resume`). Saving settings in the panel keeps these overrides; restarting Home Assistant clears them.
 
-<img width="1101" height="392" src="https://github.com/user-attachments/assets/818263b9-fc44-4ae6-b4c0-66ffc9bf7025" alt="Dimsome panel overview: today's sun elevation curve with the brighten ramp at 07:08 at civil dawn, and the dim ramp at 19:51, at civil dusk - the blue line is the 'now' line (at ~15:13)"/>
+<img width="1101" height="392" src="https://github.com/user-attachments/assets/818263b9-fc44-4ae6-b4c0-66ffc9bf7025" alt="DimSome panel overview: today's sun elevation curve with the brighten ramp at 07:08 at civil dawn, and the dim ramp at 19:51, at civil dusk - the blue line is the 'now' line (at ~15:13)"/>
 
 The panel overview plots today's sun elevation with both ramps. Open dots mark civil dawn and dusk, so you can see when a start bound moves a ramp away from the sun event.
 
@@ -23,7 +23,7 @@ The panel overview plots today's sun elevation with both ramps. Open dots mark c
 
 1. In HACS, open the menu (⋮) and choose **Custom repositories**.
 2. Add `https://github.com/c-kick/hnl-dimsome` with type **Integration**.
-3. Search for **Dimsome**, download it, and restart Home Assistant.
+3. Search for **DimSome**, download it, and restart Home Assistant.
 
 ### Manual
 
@@ -58,13 +58,13 @@ Restart Home Assistant after adding or changing integration Python files.
 ## Setup
 
 1. In Home Assistant, go to **Settings → Devices & services**.
-2. Select **Add integration** and search for **Dimsome**.
-3. Create the entry (Dimsome supports a single integration entry).
-4. Open the **Dimsome** sidebar panel and configure global defaults and the lights to control.
+2. Select **Add integration** and search for **DimSome**.
+3. Create the entry (DimSome supports a single integration entry).
+4. Open the **DimSome** sidebar panel and configure global defaults and the lights to control.
 
 ## Configuration
 
-Configuration is done from the Dimsome sidebar panel. Per-light settings fall back to the global defaults unless overridden.
+Configuration is done from the DimSome sidebar panel. Per-light settings fall back to the global defaults unless overridden.
 
 ### Global settings
 
@@ -87,7 +87,7 @@ Configuration is done from the Dimsome sidebar panel. Per-light settings fall ba
 - **Settle Delay** — wait after a light turns on before applying its target.
 - **Schedule / Ramp Duration / Override Resume / Grace Period overrides** — per-light overrides of the global schedule and resume behavior.
 
-Per-light **enable/pause** is handled by the `Dimsome enabled` switch entity.
+Per-light **enable/pause** is handled by the `DimSome enabled` switch entity.
 
 Each light card shows a 24-hour brightness profile with today's civil dawn and dusk marked. With color temperature configured, the line is tinted by the target color over the day:
 
@@ -100,14 +100,14 @@ A light can override the global timing. Here it brightens by 06:15, ahead of civ
 
 ## Entities
 
-- `button.dimsome_resume` — resume Dimsome control for all configured lights.
+- `button.dimsome_resume` — resume DimSome control for all configured lights.
 - Per-light resume buttons — resume one light.
-- Per-light `Dimsome enabled` switches — enable or pause control for one light.
-- Per-light diagnostic sensors — expose runtime state via attributes such as `status`, `active_window`, `next_window_start`, `target`, and manual-override state. During an active ramp `next_window_start` points to the *following* ramp; use `active_window` and `target` to confirm Dimsome is ramping correctly.
+- Per-light `DimSome enabled` switches — enable or pause control for one light.
+- Per-light diagnostic sensors — expose runtime state via attributes such as `status`, `active_window`, `next_window_start`, `target`, and manual-override state. During an active ramp `next_window_start` points to the *following* ramp; use `active_window` and `target` to confirm DimSome is ramping correctly.
 
 ## Service: `dimsome.resume`
 
-Resume Dimsome control for all configured lights, or only the listed entities.
+Resume DimSome control for all configured lights, or only the listed entities.
 
 ```yaml
 service: dimsome.resume
