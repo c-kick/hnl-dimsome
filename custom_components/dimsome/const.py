@@ -1,7 +1,7 @@
 """Constants for the Dimsome integration."""
 
 DOMAIN = "dimsome"
-VERSION = "0.3.1"
+VERSION = "1.0.0"
 PLATFORMS = ["button", "sensor", "switch"]
 
 SERVICE_RESUME = "resume"
