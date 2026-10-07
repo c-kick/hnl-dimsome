@@ -19,6 +19,8 @@ The panel overview plots today's sun elevation with both ramps. Open dots mark c
 
 ## Installation
 
+DimSome requires Home Assistant 2024.9 or later.
+
 ### HACS
 
 1. In HACS, open the menu (⋮) and choose **Custom repositories**.
