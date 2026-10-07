@@ -1637,7 +1637,7 @@ class DimsomePanel extends HTMLElement {
         ${this._renderToolbar(false)}
         <div class="center-state-wrap">
           <div class="center-state">
-            <ha-circular-progress active></ha-circular-progress>
+            <div class="spinner" role="progressbar" aria-label="Loading"></div>
             <p>Loading DimSome…</p>
           </div>
         </div>
@@ -2113,6 +2113,21 @@ class DimsomePanel extends HTMLElement {
 
         .center-state p {
           color: var(--secondary-text-color);
+        }
+
+        .spinner {
+          animation: spin 1s linear infinite;
+          border: 4px solid var(--divider-color);
+          border-radius: 50%;
+          border-top-color: var(--primary-color);
+          height: 40px;
+          width: 40px;
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
         }
 
         .empty-icon {
