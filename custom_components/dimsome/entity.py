@@ -20,7 +20,6 @@ def light_device_info(entry_id: str, entity_id: str) -> dict[str, Any]:
     return {
         "identifiers": {(DOMAIN, entry_id, entity_id)},
         "name": entity_id,
-        "via_device": (DOMAIN, entry_id),
     }
 
 

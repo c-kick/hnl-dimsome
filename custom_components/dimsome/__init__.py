@@ -126,19 +126,26 @@ def _take_manual_overrides(hass: HomeAssistant, entry_id: str) -> dict[str, Any]
 def _migrate_per_light_entities(
     hass: HomeAssistant, entry_id: str, lights: dict[str, Any]
 ) -> None:
-    """Attach existing per-light entities to their per-light devices."""
+    """Register per-light devices under the hub device and attach their entities."""
     from homeassistant.helpers import device_registry as dr
     from homeassistant.helpers import entity_registry as er
 
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
+    hub_device = device_registry.async_get_or_create(
+        config_entry_id=entry_id,
+        identifiers={(DOMAIN, entry_id)},
+        name="DimSome",
+    )
     for entity_id in lights:
         light_device = device_registry.async_get_or_create(
             config_entry_id=entry_id,
             identifiers={(DOMAIN, entry_id, entity_id)},
             name=entity_id,
-            via_device=(DOMAIN, entry_id),
         )
+        # async_get_or_create only accepts via_device_id from HA 2026.8;
+        # async_update_device accepts it on every supported version.
+        device_registry.async_update_device(light_device.id, via_device_id=hub_device.id)
         _move_entity_to_device(
             entity_registry,
             "button",
