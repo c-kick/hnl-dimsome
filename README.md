@@ -23,9 +23,12 @@ DimSome requires Home Assistant 2024.9 or later.
 
 ### HACS
 
-1. In HACS, open the menu (⋮) and choose **Custom repositories**.
-2. Add `https://github.com/c-kick/hnl-dimsome` with type **Integration**.
-3. Search for **DimSome**, download it, and restart Home Assistant.
+DimSome is in the default HACS repository list.
+
+[![Open your Home Assistant instance and open DimSome in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=c-kick&repository=hnl-dimsome&category=integration)
+
+1. In HACS, search for **DimSome**.
+2. Download it, and restart Home Assistant.
 
 ### Manual
 
