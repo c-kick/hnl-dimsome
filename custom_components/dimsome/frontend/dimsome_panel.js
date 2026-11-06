@@ -1542,7 +1542,7 @@ class DimsomePanel extends HTMLElement {
           || (this._canSave() ? "You have unsaved changes" : "Only administrators can save changes")
         )}</span>
         <div class="save-bar-actions">
-          <ha-button data-action="discard" ${this._saving ? "disabled" : ""}>Discard</ha-button>
+          <ha-button appearance="plain" data-action="discard" ${this._saving ? "disabled" : ""}>Discard</ha-button>
           <ha-button raised data-action="save" ${this._saving || !this._canSave() ? "disabled" : ""}>${this._saving ? "Saving…" : "Save"}</ha-button>
         </div>
       </div>
@@ -1626,7 +1626,7 @@ class DimsomePanel extends HTMLElement {
             `)}
           </div>
           <div class="dialog-actions">
-            <ha-button data-action="cancel-add">Cancel</ha-button>
+            <ha-button appearance="plain" data-action="cancel-add">Cancel</ha-button>
             <ha-button raised data-action="confirm-add">Add Light</ha-button>
           </div>
         </div>
