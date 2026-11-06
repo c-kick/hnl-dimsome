@@ -1,6 +1,7 @@
 {
   "domain": "dimsome",
   "name": "DimSome",
+  "categories": ["lighting"],
   "codeowners": ["@c-kick"],
   "config_flow": true,
   "dependencies": [
