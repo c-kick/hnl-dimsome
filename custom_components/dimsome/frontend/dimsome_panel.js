@@ -1580,6 +1580,7 @@ class DimsomePanel extends HTMLElement {
         open
         hideActions
         heading="Add Light"
+        header-title="Add Light"
         scrimClickAction="cancel"
         escapeKeyAction="cancel"
       >
