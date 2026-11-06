@@ -60,6 +60,13 @@ const escapeHtml = (value) => String(value ?? "")
   .replaceAll(">", "&gt;")
   .replaceAll('"', "&quot;");
 
+// ha-button's icon slot is "start" on current frontends and "icon" on older
+// ones. Each version renders the slot it knows and ignores the other.
+const buttonIcon = (path) => `
+  <ha-svg-icon slot="start" path="${path}"></ha-svg-icon>
+  <ha-svg-icon slot="icon" path="${path}"></ha-svg-icon>
+`;
+
 const durationToMinutes = (value, fallback = 60) => {
   if (!value) return fallback;
   const parts = String(value).split(":").map((part) => Number(part));
@@ -1026,7 +1033,7 @@ class DimsomePanel extends HTMLElement {
               <div class="hero-sub">${escapeHtml(subParts.join(" · "))}</div>
             </div>
             <ha-button data-action="resume" title="Resume all lights">
-              <ha-svg-icon slot="icon" path="${MDI_PLAY_CIRCLE}"></ha-svg-icon>
+              ${buttonIcon(MDI_PLAY_CIRCLE)}
               Resume all
             </ha-button>
           </div>
@@ -1687,7 +1694,7 @@ class DimsomePanel extends HTMLElement {
           <div class="section-head-actions">
             <span class="lights-count">${this._config.lights.length} configured</span>
             <ha-button raised data-action="open-add-dialog">
-              <ha-svg-icon slot="icon" path="${MDI_PLUS}"></ha-svg-icon>
+              ${buttonIcon(MDI_PLUS)}
               Add Light
             </ha-button>
           </div>
